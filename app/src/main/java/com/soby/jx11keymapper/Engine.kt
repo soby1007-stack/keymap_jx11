@@ -23,6 +23,8 @@ enum class Act(val label: String, val kind: Kind, val code: Int = 0, val repeatO
     DOWN("아래 (방향키)", Kind.KEY, KeyEvent.KEYCODE_DPAD_DOWN, true),
     LEFT("왼쪽 (방향키)", Kind.KEY, KeyEvent.KEYCODE_DPAD_LEFT, true),
     RIGHT("오른쪽 (방향키)", Kind.KEY, KeyEvent.KEYCODE_DPAD_RIGHT, true),
+    PAGE_UP("페이지 위 (PageUp)", Kind.KEY, KeyEvent.KEYCODE_PAGE_UP, true),
+    PAGE_DOWN("페이지 아래 (PageDown)", Kind.KEY, KeyEvent.KEYCODE_PAGE_DOWN, true),
     OK("확인", Kind.KEY, KeyEvent.KEYCODE_DPAD_CENTER),
     NOTIF("알림창 열기", Kind.NOTIF),
     POWER("전원 (화면 켜기/끄기)", Kind.KEY, KeyEvent.KEYCODE_POWER);
@@ -167,7 +169,18 @@ object ActionRunner {
         try {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             when (act.kind) {
-                Kind.VOLUME -> VolumeAction.apply(ctx, act == Act.VOL_UP, n)
+                Kind.VOLUME -> {
+                    if (Cfg.volumeKey && shell != null) {
+                        // 진짜 볼륨 키 입력 주입: 이북 앱 등 포그라운드 앱이 볼륨키로 페이지를 넘기는 경우에도 동작,
+                        // 앱이 안 받으면 시스템이 볼륨을 조절한다
+                        val kc = if (act == Act.VOL_UP) KeyEvent.KEYCODE_VOLUME_UP else KeyEvent.KEYCODE_VOLUME_DOWN
+                        repeat(n) { shell.sendKey(kc) }
+                        Diag.v("ACTION", "볼륨 키 주입 keycode=$kc x$n")
+                    } else {
+                        if (Cfg.volumeKey) Diag.w("ACTION", "볼륨 키 주입하려면 Shizuku 연결 필요 → AudioManager로 대체")
+                        VolumeAction.apply(ctx, act == Act.VOL_UP, n)
+                    }
+                }
                 Kind.MUTE -> {
                     val flags = if (Cfg.showUi) AudioManager.FLAG_SHOW_UI else 0
                     am.adjustVolume(AudioManager.ADJUST_TOGGLE_MUTE, flags)

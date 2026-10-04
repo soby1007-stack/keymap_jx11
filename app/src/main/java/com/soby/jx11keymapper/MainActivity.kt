@@ -127,6 +127,7 @@ class MainActivity : Activity() {
 
         // ── 볼륨 동작 ──
         root.addView(title("볼륨 동작"))
+        root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용, Shizuku)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
         root.addView(sw("미디어 볼륨 고정 (끄면 실제 볼륨키와 동일)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it }))
         root.addView(sw("볼륨 UI 표시", { Cfg.showUi }, { Cfg.showUi = it }))
         root.addView(sw("화면 꺼져도 확실히 동작 (배터리 더 사용)", { Cfg.wakeLock }, {

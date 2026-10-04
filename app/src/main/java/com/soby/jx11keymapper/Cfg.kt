@@ -15,6 +15,7 @@ object Cfg {
     @Volatile var idleResetMs: Int = 400        // 이 시간 멈추면 누적 초기화
     @Volatile var stepsPerFire: Int = 1         // 볼륨/방향키 1회 동작당 반복 수
     @Volatile var mediaFixed: Boolean = false   // true: 미디어 볼륨 고정, false: 볼륨키와 동일(활성 스트림)
+    @Volatile var volumeKey: Boolean = true     // true: 볼륨을 키 입력으로 주입(이북 페이지 넘김 등), false: AudioManager 직접 조절
     @Volatile var showUi: Boolean = true
     @Volatile var wakeLock: Boolean = true
     @Volatile var enabled: Boolean = false      // 사용자가 켜 둔 상태
@@ -104,6 +105,7 @@ object Cfg {
         idleResetMs = p.getInt("idleResetMs", 400)
         stepsPerFire = p.getInt("stepsPerFire", 1)
         mediaFixed = p.getBoolean("mediaFixed", false)
+        volumeKey = p.getBoolean("volumeKey", true)
         showUi = p.getBoolean("showUi", true)
         wakeLock = p.getBoolean("wakeLock", true)
         enabled = p.getBoolean("enabled", false)
@@ -118,6 +120,7 @@ object Cfg {
             ?.putInt("idleResetMs", idleResetMs)
             ?.putInt("stepsPerFire", stepsPerFire)
             ?.putBoolean("mediaFixed", mediaFixed)
+            ?.putBoolean("volumeKey", volumeKey)
             ?.putBoolean("showUi", showUi)
             ?.putBoolean("wakeLock", wakeLock)
             ?.putBoolean("enabled", enabled)
@@ -126,5 +129,5 @@ object Cfg {
 
     fun describe(): String =
         "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold cd=${cooldownMs}ms idle=${idleResetMs}ms " +
-            "steps=$stepsPerFire media=$mediaFixed ui=$showUi wake=$wakeLock enabled=$enabled"
+            "steps=$stepsPerFire media=$mediaFixed vkey=$volumeKey ui=$showUi wake=$wakeLock enabled=$enabled"
 }
