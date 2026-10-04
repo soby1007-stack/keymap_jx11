@@ -47,7 +47,7 @@ class InputService : IInputService.Stub() {
     override fun ping(): String = "uid=${Os.getuid()} 64bit=${Process.is64Bit()}"
 
     override fun listDevices(): String {
-        return scanDevices().joinToString("\n") { "${it.name}  (${it.path})" }
+        return scanDevices(true).joinToString("\n") { "${it.name}  (${it.path})" }
     }
 
     override fun stop() {
@@ -130,9 +130,15 @@ class InputService : IInputService.Stub() {
 
         scanner = thread(name = "jx11-scan") {
             var lastSig = "?"
+            var lastAllSig = "?"
             while (running.get() && gen == generation) {
                 try {
                     val all = scanDevices()
+                    val allSig = all.joinToString(", ") { "${it.name}(${it.path})" }
+                    if (allSig != lastAllSig) {
+                        lastAllSig = allSig
+                        report("I", "DEVICE", "전체 입력장치 ${all.size}개: $allSig")
+                    }
                     val matched = all.filter { filter.isEmpty() || it.name.contains(filter, ignoreCase = true) }
                     val sig = matched.joinToString(", ") { "${it.name}(${it.path})" }
                     if (sig != lastSig) {
@@ -178,30 +184,109 @@ class InputService : IInputService.Stub() {
             }
         }
         streams.clear()
+        for (p in procs.values) {
+            try {
+                p.destroy()
+            } catch (e: Throwable) {
+                // 무시
+            }
+        }
+        procs.clear()
         active.clear()
     }
 
-    private fun scanDevices(): List<Dev> {
+    // ───────── 장치 탐색 ─────────
+    // Android 15 등에서는 shell 이 /proc/bus/input/devices 를 못 읽는다(EACCES).
+    // 그래서 `getevent -lp` (이름 조회) 결과를 파싱하고, /dev/input 노드 목록이
+    // 바뀐 때만 다시 조회한다.
+
+    private val addRe = Regex("add device \\d+: (\\S+)")
+    private val nameRe = Regex("^\\s*name:\\s+\"(.*)\"")
+    private var lastNodes: Set<String> = emptySet()
+    private var nameCache: List<Dev> = emptyList()
+    private var lastQueryErr = ""
+
+    @Synchronized
+    private fun scanDevices(force: Boolean = false): List<Dev> {
+        val nodes: Set<String>? = File("/dev/input").list()?.filter { it.startsWith("event") }?.toSet()
+        if (!force && nodes != null && nodes == lastNodes && nameCache.isNotEmpty()) return nameCache
+        val devs = queryDevices()
+        lastNodes = nodes ?: emptySet()
+        nameCache = devs
+        return devs
+    }
+
+    private fun queryDevices(): List<Dev> {
         val out = ArrayList<Dev>()
-        val text = try {
-            File("/proc/bus/input/devices").readText()
+        val text: String
+        try {
+            val p = ProcessBuilder("/system/bin/getevent", "-lp").redirectErrorStream(true).start()
+            text = p.inputStream.bufferedReader().readText()
+            val rc = p.waitFor()
+            report("D", "DEVICE", "getevent -lp rc=$rc 출력 ${text.length}자")
+            lastQueryErr = ""
         } catch (e: Throwable) {
-            report("E", "DEVICE", "/proc/bus/input/devices 읽기 실패: ${chain(e)}")
+            val msg = chain(e)
+            if (msg != lastQueryErr) {
+                lastQueryErr = msg
+                report("E", "DEVICE", "getevent -lp 실행 실패: $msg")
+            }
             return out
         }
-        for (block in text.split("\n\n")) {
-            var name = ""
-            var ev: String? = null
-            for (line in block.lines()) {
-                if (line.startsWith("N: Name=")) {
-                    name = line.substringAfter("Name=").trim().trim('"')
-                } else if (line.startsWith("H: Handlers=")) {
-                    ev = line.substringAfter("Handlers=").trim().split(" ").firstOrNull { it.startsWith("event") }
-                }
+        var path: String? = null
+        for (line in text.lines()) {
+            val a = addRe.find(line)
+            if (a != null) {
+                path = a.groupValues[1]
+                continue
             }
-            if (ev != null) out.add(Dev(name, "/dev/input/$ev"))
+            val n = nameRe.find(line)
+            if (n != null && path != null) {
+                out.add(Dev(n.groupValues[1], path))
+                path = null
+            }
+        }
+        if (out.isEmpty()) {
+            val msg = "getevent -lp 결과에서 장치를 하나도 못 찾음 (출력 앞부분: ${text.take(200).replace("\n", " ")})"
+            if (msg != lastQueryErr) {
+                lastQueryErr = msg
+                report("E", "DEVICE", msg)
+            }
         }
         return out
+    }
+
+    // ───────── 대체 읽기: 직접 open 이 막히면 `getevent <장치>` 숫자 출력 파싱 ─────────
+
+    private val procs = ConcurrentHashMap<String, java.lang.Process>()
+    private val numRe = Regex("^(?:/dev/\\S+:\\s*)?([0-9a-fA-F]{4})\\s+([0-9a-fA-F]{4})\\s+([0-9a-fA-F]{8})\\s*$")
+
+    private fun readViaGetevent(d: Dev, gen: Int) {
+        report("I", "READ", "getevent 대체 경로 시작: ${d.name} (${d.path})")
+        val p = ProcessBuilder("/system/bin/getevent", d.path).redirectErrorStream(true).start()
+        procs[d.path] = p
+        try {
+            p.inputStream.bufferedReader().useLines { lines ->
+                for (line in lines) {
+                    if (!running.get() || gen != generation) break
+                    val m = numRe.find(line.trim())
+                    if (m == null) {
+                        report("D", "READ", "무시: $line")
+                        continue
+                    }
+                    val type = m.groupValues[1].toInt(16)
+                    val code = m.groupValues[2].toInt(16)
+                    val value = m.groupValues[3].toLong(16).toInt()
+                    if (type == 1 || type == 2) {
+                        cb?.onEvent(type, code, value, d.name)
+                    }
+                }
+            }
+        } finally {
+            procs.remove(d.path)
+            p.destroy()
+        }
+        report("W", "READ", "getevent 대체 경로 종료: ${d.path}")
     }
 
     private fun readLoop(d: Dev, gen: Int) {
@@ -210,7 +295,13 @@ class InputService : IInputService.Stub() {
         val buf = ByteArray(evSize)
         val bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN)
         try {
-            val ins = FileInputStream(d.path)
+            val ins = try {
+                FileInputStream(d.path)
+            } catch (e: java.io.FileNotFoundException) {
+                report("W", "READ", "직접 열기 실패(${d.path}): ${e.message} → getevent 명령으로 대체")
+                readViaGetevent(d, gen)
+                return
+            }
             streams[d.path] = ins
             ins.use {
                 report("I", "READ", "열림: ${d.name} (${d.path}) evSize=$evSize")
