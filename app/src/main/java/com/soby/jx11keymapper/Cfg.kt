@@ -22,8 +22,8 @@ object Cfg {
     fun defaultMap(): Map<Act, List<Rule>> {
         val m = LinkedHashMap<Act, List<Rule>>()
         for (a in Act.values()) m[a] = emptyList()
-        m[Act.VOL_UP] = Rule.decodeList("2:8:+,1:104:*")     // REL_WHEEL(+), KEY_PAGEUP
-        m[Act.VOL_DOWN] = Rule.decodeList("2:8:-,1:109:*")   // REL_WHEEL(-), KEY_PAGEDOWN
+        m[Act.VOL_UP] = Rule.decodeList("2:8:+,1:104:*,100:1:*")     // REL_WHEEL(+), KEY_PAGEUP, 스와이프 ↑
+        m[Act.VOL_DOWN] = Rule.decodeList("2:8:-,1:109:*,100:2:*")   // REL_WHEEL(-), KEY_PAGEDOWN, 스와이프 ↓
         return m
     }
 
@@ -82,6 +82,23 @@ object Cfg {
         deviceFilter = p.getString("deviceFilter", "JX") ?: "JX"
         val saved = p.getString("map", null)
         map = if (saved == null) defaultMap() else decodeMap(saved)
+        if (!p.getBoolean("mig_gesture", false)) {
+            // v0.2.2 이전에 잘못 학습된 BTN_TOUCH(터치) 규칙 제거 + 스와이프 기본 규칙 추가
+            val m = LinkedHashMap<Act, List<Rule>>(map)
+            var removed = 0
+            for (a in Act.values()) {
+                val keep = (m[a] ?: emptyList()).filter { !(it.type == EventNames.EV_KEY && (it.code == 330 || it.code == 325)) }
+                removed += (m[a] ?: emptyList()).size - keep.size
+                m[a] = keep
+            }
+            if (m.values.none { l -> l.any { it.type == EventNames.EV_GESTURE } }) {
+                m[Act.VOL_UP] = (m[Act.VOL_UP] ?: emptyList()) + Rule(EventNames.EV_GESTURE, 1, 0)
+                m[Act.VOL_DOWN] = (m[Act.VOL_DOWN] ?: emptyList()) + Rule(EventNames.EV_GESTURE, 2, 0)
+            }
+            map = m
+            p.edit().putBoolean("mig_gesture", true).putString("map", encodeMap(m)).apply()
+            Diag.i("CONF", "v0.2.2 마이그레이션: BTN_TOUCH 규칙 ${removed}개 제거, 스와이프 기본 규칙 추가")
+        }
         threshold = p.getFloat("threshold", 1.0f)
         cooldownMs = p.getInt("cooldownMs", 120)
         idleResetMs = p.getInt("idleResetMs", 400)

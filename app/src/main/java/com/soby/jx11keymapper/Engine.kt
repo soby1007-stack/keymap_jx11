@@ -31,7 +31,7 @@ enum class Act(val label: String, val kind: Kind, val code: Int = 0, val repeatO
         get() = kind == Kind.KEY || kind == Kind.NOTIF
 }
 
-/** 입력 규칙. type: 1=EV_KEY, 2=EV_REL / sign: +1, -1, 0(키: 눌림) */
+/** 입력 규칙. type: 1=EV_KEY, 2=EV_REL, 100=제스처(1↑ 2↓ 3← 4→ 5탭) / sign: +1, -1, 0(키: 눌림) */
 data class Rule(val type: Int, val code: Int, val sign: Int) {
     fun encode(): String = "$type:$code:" + (if (sign > 0) "+" else if (sign < 0) "-" else "*")
 
@@ -48,6 +48,7 @@ data class Rule(val type: Int, val code: Int, val sign: Int) {
         if (type == EventNames.EV_KEY) {
             return if (v == 1 || v == 2) 1f else 0f   // 눌림 / 길게 눌러 반복
         }
+        if (type == EventNames.EV_GESTURE) return 1f
         return 0f
     }
 
@@ -83,7 +84,7 @@ object Mapper {
                 if (w > 0f) {
                     // 길게 눌러 반복되는 키는 반복 허용 기능(볼륨/방향키)에서만 인정
                     if (type == EventNames.EV_KEY && value == 2 && !act.repeatOk) return null
-                    return Hit(act, w, type == EventNames.EV_KEY)
+                    return Hit(act, w, type == EventNames.EV_KEY || (type == EventNames.EV_GESTURE && code == 5))
                 }
             }
         }
@@ -241,7 +242,8 @@ object Learner {
         }
         val qualifies = (type == EventNames.EV_REL && value != 0 &&
             code != 0 && code != 1 && code != 11 && code != 12) ||
-            (type == EventNames.EV_KEY && value == 1)
+            (type == EventNames.EV_KEY && value == 1 && code != 330 && code != 325) ||   // BTN_TOUCH 등은 제외
+            (type == EventNames.EV_GESTURE)
         if (!qualifies) return true
 
         val sign = if (type == EventNames.EV_REL) (if (value > 0) 1 else -1) else 0

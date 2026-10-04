@@ -18,12 +18,107 @@ import kotlin.system.exitProcess
 
 /**
  * Shizuku UserService — shell(uid 2000) 권한 별도 프로세스에서 실행된다.
- * /dev/input/eventN 을 직접 읽어 EV_KEY / EV_REL 이벤트만 앱으로 전달한다.
+ * /dev/input/eventN 을 직접 읽어 EV_KEY / EV_REL 과 터치 좌표(→제스처)를 앱으로 전달한다.
  * (이 프로세스에서는 Diag를 쓰지 않고 콜백(onStatus)으로 앱 로그에 남긴다)
  */
 class InputService : IInputService.Stub() {
 
-    private class Dev(val name: String, val path: String)
+    private class Dev(val name: String, val path: String) {
+        @Volatile var rangeX = 0
+        @Volatile var rangeY = 0
+    }
+
+    /**
+     * JX-11 은 휠이 아니라 터치패드(디지타이저) 방식이라 REL_WHEEL 이 아닌
+     * BTN_TOUCH + ABS 좌표로 입력이 온다. 좌표 이동을 스와이프(코드 1~4)·탭(5)으로 바꿔 앱에 전달한다.
+     * 손가락을 대고 움직이는 동안 일정 거리(범위의 5%)마다 1칸씩 발생 → 스크롤 느낌.
+     */
+    private inner class Gesture(val d: Dev) {
+        var down = false
+        var x = Int.MIN_VALUE
+        var y = Int.MIN_VALUE
+        var ax = 0
+        var ay = 0
+        var anchored = false
+        var moved = false
+        var t0 = 0L
+        var raw = 0
+
+        private fun begin() {
+            if (down) return
+            down = true
+            anchored = false
+            moved = false
+            t0 = SystemClock.elapsedRealtime()
+            report("D", "GESTURE", "${d.name} 터치 시작 (range ${d.rangeX}x${d.rangeY})")
+        }
+
+        private fun end(emit: (Int) -> Unit) {
+            if (!down) return
+            down = false
+            val dt = SystemClock.elapsedRealtime() - t0
+            if (!moved && dt < 600) {
+                report("D", "GESTURE", "${d.name} 탭 (${dt}ms)")
+                emit(5)
+            } else {
+                report("D", "GESTURE", "${d.name} 터치 끝 (${dt}ms, 이동=$moved)")
+            }
+        }
+
+        fun feed(type: Int, code: Int, value: Int, emit: (Int) -> Unit) {
+            if (type != 0 && raw < 80) {
+                raw++
+                report("D", "RAW", "${d.name} type=$type code=$code value=$value")
+            }
+            when (type) {
+                1 -> if (code == 330) {
+                    if (value == 1) begin() else if (value == 0) end(emit)
+                }
+                3 -> when (code) {
+                    0, 53 -> x = value
+                    1, 54 -> y = value
+                    57 -> if (value >= 0) begin() else end(emit)
+                }
+                0 -> if (code == 0 && down) step(emit)
+            }
+        }
+
+        private fun step(emit: (Int) -> Unit) {
+            if (x == Int.MIN_VALUE || y == Int.MIN_VALUE) return
+            if (!anchored) {
+                ax = x
+                ay = y
+                anchored = true
+                return
+            }
+            val sx = maxOf(1, (if (d.rangeX > 0) d.rangeX else 4096) / 20)
+            val sy = maxOf(1, (if (d.rangeY > 0) d.rangeY else 4096) / 20)
+            val dx = x - ax
+            val dy = y - ay
+            if (Math.abs(dy) >= sy && Math.abs(dy) * sx >= Math.abs(dx) * sy) {
+                val n = Math.abs(dy) / sy
+                ay += (if (dy > 0) 1 else -1) * n * sy
+                ax = x
+                moved = true
+                repeat(n) { emit(if (dy < 0) 1 else 2) }
+            } else if (Math.abs(dx) >= sx) {
+                val n = Math.abs(dx) / sx
+                ax += (if (dx > 0) 1 else -1) * n * sx
+                ay = y
+                moved = true
+                repeat(n) { emit(if (dx < 0) 3 else 4) }
+            }
+        }
+    }
+
+    /** 읽은 이벤트 1개 처리: KEY/REL 은 그대로, 터치 좌표는 제스처로 변환해서 전달 */
+    private fun dispatch(d: Dev, g: Gesture, type: Int, code: Int, value: Int) {
+        if (type == 1 || type == 2) cb?.onEvent(type, code, value, d.name)
+        g.feed(type, code, value) { c ->
+            report("D", "GESTURE", "${d.name} 제스처 $c")
+            cb?.onEvent(100, c, 1, d.name)
+        }
+    }
 
     private val running = AtomicBoolean(false)
 
@@ -202,6 +297,7 @@ class InputService : IInputService.Stub() {
 
     private val addRe = Regex("add device \\d+: (\\S+)")
     private val nameRe = Regex("^\\s*name:\\s+\"(.*)\"")
+    private val absRe = Regex("(ABS_X|ABS_Y|ABS_MT_POSITION_X|ABS_MT_POSITION_Y)\\s*:.*?min\\s+(-?\\d+),\\s*max\\s+(-?\\d+)")
     private var lastNodes: Set<String> = emptySet()
     private var nameCache: List<Dev> = emptyList()
     private var lastQueryErr = ""
@@ -234,17 +330,29 @@ class InputService : IInputService.Stub() {
             return out
         }
         var path: String? = null
+        var cur: Dev? = null
         for (line in text.lines()) {
             val a = addRe.find(line)
             if (a != null) {
                 path = a.groupValues[1]
+                cur = null
                 continue
             }
             val n = nameRe.find(line)
             if (n != null && path != null) {
-                out.add(Dev(n.groupValues[1], path))
+                cur = Dev(n.groupValues[1], path)
+                out.add(cur)
                 path = null
+                continue
             }
+            val r = absRe.find(line)
+            if (r != null && cur != null) {
+                val span = r.groupValues[3].toInt() - r.groupValues[2].toInt()
+                if (r.groupValues[1].endsWith("X")) cur.rangeX = span else cur.rangeY = span
+            }
+        }
+        for (d in out) {
+            if (d.rangeX > 0 || d.rangeY > 0) report("D", "DEVICE", "${d.name}(${d.path}) 좌표범위 ${d.rangeX}x${d.rangeY}")
         }
         if (out.isEmpty()) {
             val msg = "getevent -lp 결과에서 장치를 하나도 못 찾음 (출력 앞부분: ${text.take(200).replace("\n", " ")})"
@@ -265,6 +373,7 @@ class InputService : IInputService.Stub() {
         report("I", "READ", "getevent 대체 경로 시작: ${d.name} (${d.path})")
         val p = ProcessBuilder("/system/bin/getevent", d.path).redirectErrorStream(true).start()
         procs[d.path] = p
+        val g = Gesture(d)
         try {
             p.inputStream.bufferedReader().useLines { lines ->
                 for (line in lines) {
@@ -277,9 +386,7 @@ class InputService : IInputService.Stub() {
                     val type = m.groupValues[1].toInt(16)
                     val code = m.groupValues[2].toInt(16)
                     val value = m.groupValues[3].toLong(16).toInt()
-                    if (type == 1 || type == 2) {
-                        cb?.onEvent(type, code, value, d.name)
-                    }
+                    dispatch(d, g, type, code, value)
                 }
             }
         } finally {
@@ -294,6 +401,7 @@ class InputService : IInputService.Stub() {
         val evSize = tsSize + 8                          // + type(2) code(2) value(4)
         val buf = ByteArray(evSize)
         val bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN)
+        val g = Gesture(d)
         try {
             val ins = try {
                 FileInputStream(d.path)
@@ -315,14 +423,12 @@ class InputService : IInputService.Stub() {
                     val type = bb.getShort(tsSize).toInt() and 0xFFFF
                     val code = bb.getShort(tsSize + 2).toInt() and 0xFFFF
                     val value = bb.getInt(tsSize + 4)
-                    if (type == 1 || type == 2) {
-                        try {
-                            cb?.onEvent(type, code, value, d.name)
-                        } catch (e: Throwable) {
-                            report("W", "READ", "앱으로 전달 실패 → 읽기 중단: ${e.message}")
-                            running.set(false)
-                            return
-                        }
+                    try {
+                        dispatch(d, g, type, code, value)
+                    } catch (e: Throwable) {
+                        report("W", "READ", "앱으로 전달 실패 → 읽기 중단: ${e.message}")
+                        running.set(false)
+                        return
                     }
                 }
             }

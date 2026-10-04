@@ -11,8 +11,8 @@ android {
         applicationId = "com.soby.jx11keymapper"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.2.2"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)

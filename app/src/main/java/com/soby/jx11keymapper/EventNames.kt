@@ -4,6 +4,9 @@ package com.soby.jx11keymapper
 object EventNames {
     const val EV_KEY = 1
     const val EV_REL = 2
+    const val EV_GESTURE = 100   // 가상 이벤트: 터치 좌표에서 만든 스와이프/탭
+
+    private val gesture = mapOf(1 to "스와이프 ↑", 2 to "스와이프 ↓", 3 to "스와이프 ←", 4 to "스와이프 →", 5 to "탭")
 
     private val rel = mapOf(
         0 to "REL_X", 1 to "REL_Y", 2 to "REL_Z",
@@ -24,12 +27,14 @@ object EventNames {
     fun typeName(type: Int): String = when (type) {
         EV_KEY -> "EV_KEY"
         EV_REL -> "EV_REL"
+        EV_GESTURE -> "GESTURE"
         else -> "EV_$type"
     }
 
     fun codeName(type: Int, code: Int): String = when (type) {
         EV_REL -> rel[code] ?: "REL_$code"
         EV_KEY -> key[code] ?: "KEY_$code"
+        EV_GESTURE -> gesture[code] ?: "제스처$code"
         else -> "CODE_$code"
     }
 
