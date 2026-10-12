@@ -27,6 +27,8 @@ class MainActivity : Activity() {
 
     private val h = Handler(Looper.getMainLooper())
     private lateinit var tvShizuku: TextView
+    private lateinit var tvAdb: TextView
+    private lateinit var btnBackend: Button
     private lateinit var tvStatus: TextView
     private lateinit var tvLive: TextView
     private lateinit var tvDevices: TextView
@@ -83,6 +85,18 @@ class MainActivity : Activity() {
         root.addView(tvDevices)
         root.addView(button("Shizuku 권한 요청") { requestShizuku() })
 
+        // ── 연결 방식 (shell 권한을 얻는 방법) ──
+        root.addView(title("연결 방식"))
+        root.addView(label("shell 권한을 Shizuku 또는 무선 ADB(앱이 직접 페어링) 중 어느 쪽으로 얻을지 고릅니다.").apply { textSize = 12f })
+        btnBackend = button("") { chooseBackend() }
+        root.addView(btnBackend)
+        tvAdb = label("")
+        root.addView(tvAdb)
+        root.addView(row(
+            button("무선 ADB 연결(페어링)") { startAdbPairing() },
+            button("ADB 서버 종료") { killAdb() }
+        ))
+
         swRun = Switch(this).apply {
             text = "키맵퍼 켜기"
             textSize = 16f
@@ -104,7 +118,7 @@ class MainActivity : Activity() {
         tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(tableBox)
         root.addView(label("＋ 를 누르고 JX-11 입력 → 등록 (한 기능에 여러 개 가능) · － 는 삭제\n" +
-            "⚡ 는 Shizuku 연결이 필요한 동작 · 같은 입력은 한 기능에만 지정돼요").apply { textSize = 12f })
+            "⚡ 는 shell 권한(Shizuku 또는 무선 ADB)이 필요한 동작 · 같은 입력은 한 기능에만 지정돼요").apply { textSize = 12f })
         root.addView(button("표 기본값으로") {
             Cfg.resetRules()
             toast("기본값으로 복원")
@@ -127,7 +141,12 @@ class MainActivity : Activity() {
 
         // ── 볼륨 동작 ──
         root.addView(title("볼륨 동작"))
-        root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용, Shizuku)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
+        root.addView(sw("JX-11 독점: 원래 터치/스크롤 동작 막기 (켜면 서비스 재시작)", { Cfg.grab }, {
+            Cfg.grab = it
+            Cfg.save()
+            KeymapService.instance?.restartInput()
+        }))
+        root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
         root.addView(sw("미디어 볼륨 고정 (끄면 실제 볼륨키와 동일)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it }))
         root.addView(sw("볼륨 UI 표시", { Cfg.showUi }, { Cfg.showUi = it }))
         root.addView(sw("화면 꺼져도 확실히 동작 (배터리 더 사용)", { Cfg.wakeLock }, {
@@ -290,6 +309,10 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         tvShizuku.text = shizukuState()
+        btnBackend.text = "연결 방식: " + backendName(Cfg.backend) + "  (눌러서 변경)"
+        tvAdb.text = "무선 ADB: " + (if (AdbPairingService.running) AdbPairingService.state
+            else if (Cfg.adbPort != 0) "서버 정보 저장됨 (포트 ${Cfg.adbPort}) · ${AdbPairingService.state}"
+            else "서버 없음 · ${AdbPairingService.state}")
         tvStatus.text = "상태: ${KeymapService.status}"
         val fires = KeymapService.instance?.engine?.fireCount ?: 0L
         tvLive.text = "수신 이벤트 ${KeymapService.eventCount} · 동작 실행 $fires\n마지막: ${KeymapService.lastEvent}"
@@ -315,6 +338,66 @@ class MainActivity : Activity() {
             swRun.isChecked = Cfg.enabled
             updating = false
         }
+    }
+
+    private fun backendName(b: Int) = when (b) {
+        KeymapService.BACKEND_SHIZUKU -> "Shizuku만"
+        KeymapService.BACKEND_ADB -> "무선 ADB만"
+        else -> "자동 (Shizuku 우선, 없으면 무선 ADB)"
+    }
+
+    private fun chooseBackend() {
+        val names = arrayOf(backendName(0), backendName(1), backendName(2))
+        AlertDialog.Builder(this)
+            .setTitle("연결 방식")
+            .setSingleChoiceItems(names, Cfg.backend) { d, which ->
+                Cfg.backend = which
+                Cfg.save()
+                Diag.i("UI", "연결 방식 변경: ${names[which]}")
+                d.dismiss()
+                if (Cfg.enabled) {
+                    toast("서비스를 다시 시작합니다")
+                    KeymapService.stop(this)
+                    h.postDelayed({ KeymapService.start(this) }, 700)
+                }
+            }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    private fun startAdbPairing() {
+        AlertDialog.Builder(this)
+            .setTitle("무선 ADB 연결")
+            .setMessage("1) 설정 > 개발자 옵션 > 무선 디버깅 을 켭니다 (Wi-Fi 연결 필요)\n" +
+                "2) 무선 디버깅 안의 '페어링 코드로 기기 페어링'을 누릅니다\n" +
+                "3) 알림창의 [코드 입력]에 6자리 코드를 입력합니다\n\n" +
+                "한 번 연결하면 Wi-Fi를 꺼도 재부팅 전까지 유지돼요. 이미 페어링했다면 무선 디버깅만 켜 두면 자동으로 이어집니다.")
+            .setPositiveButton("시작") { _, _ ->
+                try {
+                    AdbPairingService.start(this)
+                } catch (t: Throwable) {
+                    Diag.e("UI", "무선 ADB 마법사 시작 실패", t)
+                    toast("시작 실패: ${t.message}")
+                }
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                } catch (t: Throwable) {
+                    Diag.w("UI", "개발자 옵션 열기 실패: ${t.message}")
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun killAdb() {
+        Thread {
+            try {
+                AdbBridge.quitServer()
+                runOnUiThread { toast("서버 종료 요청을 보냈습니다") }
+            } catch (t: Throwable) {
+                Diag.e("UI", "서버 종료 실패", t)
+            }
+        }.start()
     }
 
     private fun shizukuState(): String {

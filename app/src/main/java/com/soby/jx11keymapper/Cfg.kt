@@ -7,6 +7,9 @@ import android.content.SharedPreferences
 object Cfg {
     private var sp: SharedPreferences? = null
 
+    @Volatile var backend: Int = 0              // 0=자동(Shizuku 우선→무선 ADB), 1=Shizuku만, 2=무선 ADB만
+    @Volatile var adbPort: Int = 0              // 무선 ADB 서버(AdbServer) 로컬 포트
+    @Volatile var adbToken: String = ""         // 서버 접속 토큰
     @Volatile var deviceFilter: String = "JX"
     @Volatile var map: Map<Act, List<Rule>> = defaultMap()   // 기능별 입력 규칙 (표의 내용)
     @Volatile var mapVersion: Int = 0                        // 표가 바뀌면 증가 → 화면 다시 그림
@@ -16,6 +19,7 @@ object Cfg {
     @Volatile var stepsPerFire: Int = 1         // 볼륨/방향키 1회 동작당 반복 수
     @Volatile var mediaFixed: Boolean = false   // true: 미디어 볼륨 고정, false: 볼륨키와 동일(활성 스트림)
     @Volatile var volumeKey: Boolean = true     // true: 볼륨을 키 입력으로 주입(이북 페이지 넘김 등), false: AudioManager 직접 조절
+    @Volatile var grab: Boolean = true          // JX-11 독점: 원래 터치/스크롤 동작 막기 (EVIOCGRAB)
     @Volatile var showUi: Boolean = true
     @Volatile var wakeLock: Boolean = true
     @Volatile var enabled: Boolean = false      // 사용자가 켜 둔 상태
@@ -106,6 +110,10 @@ object Cfg {
         stepsPerFire = p.getInt("stepsPerFire", 1)
         mediaFixed = p.getBoolean("mediaFixed", false)
         volumeKey = p.getBoolean("volumeKey", true)
+        backend = p.getInt("backend", 0)
+        adbPort = p.getInt("adbPort", 0)
+        adbToken = p.getString("adbToken", "") ?: ""
+        grab = p.getBoolean("grab", true)
         showUi = p.getBoolean("showUi", true)
         wakeLock = p.getBoolean("wakeLock", true)
         enabled = p.getBoolean("enabled", false)
@@ -121,6 +129,10 @@ object Cfg {
             ?.putInt("stepsPerFire", stepsPerFire)
             ?.putBoolean("mediaFixed", mediaFixed)
             ?.putBoolean("volumeKey", volumeKey)
+            ?.putInt("backend", backend)
+            ?.putInt("adbPort", adbPort)
+            ?.putString("adbToken", adbToken)
+            ?.putBoolean("grab", grab)
             ?.putBoolean("showUi", showUi)
             ?.putBoolean("wakeLock", wakeLock)
             ?.putBoolean("enabled", enabled)
@@ -129,5 +141,5 @@ object Cfg {
 
     fun describe(): String =
         "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold cd=${cooldownMs}ms idle=${idleResetMs}ms " +
-            "steps=$stepsPerFire media=$mediaFixed vkey=$volumeKey ui=$showUi wake=$wakeLock enabled=$enabled"
+            "steps=$stepsPerFire media=$mediaFixed backend=$backend adbPort=$adbPort vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
 }

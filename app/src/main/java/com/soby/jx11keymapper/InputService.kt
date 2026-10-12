@@ -1,6 +1,7 @@
 package com.soby.jx11keymapper
 
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
 import android.system.Os
@@ -125,7 +126,15 @@ class InputService : IInputService.Stub() {
     @Volatile
     private var generation = 0
     private val active = ConcurrentHashMap<String, Boolean>()
-    private val streams = ConcurrentHashMap<String, FileInputStream>()
+    private val streams = ConcurrentHashMap<String, java.io.Closeable>()
+
+    @Volatile
+    private var grab = false
+
+    override fun setGrab(on: Boolean) {
+        grab = on
+        report("I", "SVC", "장치 독점(GRAB) 요청: $on")
+    }
 
     @Volatile
     private var cb: IEventCallback? = null
@@ -403,20 +412,43 @@ class InputService : IInputService.Stub() {
         val bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN)
         val g = Gesture(d)
         try {
-            val ins = try {
-                FileInputStream(d.path)
-            } catch (e: java.io.FileNotFoundException) {
-                report("W", "READ", "직접 열기 실패(${d.path}): ${e.message} → getevent 명령으로 대체")
-                readViaGetevent(d, gen)
-                return
+            var closer: java.io.Closeable? = null
+            var ins: FileInputStream? = null
+            var grabbed = false
+            if (grab) {
+                if (!NativeGrab.load()) {
+                    report("W", "GRAB", "네이티브 라이브러리 로드 실패 → 독점 없이 읽기: ${NativeGrab.loadError}")
+                } else {
+                    val r = NativeGrab.grabOpen(d.path)
+                    if (r >= 0) {
+                        val pfd = ParcelFileDescriptor.adoptFd(r)
+                        closer = pfd
+                        ins = FileInputStream(pfd.fileDescriptor)
+                        grabbed = true
+                        report("I", "GRAB", "독점 성공: ${d.name} (${d.path}) → 이 장치의 원래 동작은 차단됨")
+                    } else {
+                        val why = if (r <= -1000) "EVIOCGRAB errno=${-r - 1000}" else "open errno=${-r}"
+                        report("W", "GRAB", "독점 실패(${d.path}): $why → 독점 없이 읽기")
+                    }
+                }
             }
-            streams[d.path] = ins
-            ins.use {
-                report("I", "READ", "열림: ${d.name} (${d.path}) evSize=$evSize")
+            if (ins == null) {
+                ins = try {
+                    FileInputStream(d.path)
+                } catch (e: java.io.FileNotFoundException) {
+                    report("W", "READ", "직접 열기 실패(${d.path}): ${e.message} → getevent 명령으로 대체")
+                    readViaGetevent(d, gen)
+                    return
+                }
+                closer = ins
+            }
+            streams[d.path] = closer!!
+            try {
+                report("I", "READ", "열림: ${d.name} (${d.path}) evSize=$evSize grab=$grabbed")
                 while (running.get() && gen == generation) {
                     var off = 0
                     while (off < evSize) {
-                        val n = it.read(buf, off, evSize - off)
+                        val n = ins!!.read(buf, off, evSize - off)
                         if (n < 0) throw EOFException("입력 장치 EOF")
                         off += n
                     }
@@ -430,6 +462,12 @@ class InputService : IInputService.Stub() {
                         running.set(false)
                         return
                     }
+                }
+            } finally {
+                try {
+                    closer?.close()
+                } catch (e: Throwable) {
+                    // 무시
                 }
             }
         } catch (e: Throwable) {

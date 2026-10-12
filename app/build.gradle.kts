@@ -5,14 +5,15 @@ plugins {
 
 android {
     namespace = "com.soby.jx11keymapper"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.soby.jx11keymapper"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.2.3"
+        ndk { abiFilters += "arm64-v8a" }
+        versionCode = 7
+        versionName = "0.4.0"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)
@@ -38,6 +39,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
+    packaging {
+        jniLibs { useLegacyPackaging = true }   // .so 를 파일로 추출 → shell 프로세스에서도 로드 가능
+    }
     buildFeatures {
         aidl = true
         buildConfig = true
@@ -47,4 +54,7 @@ android {
 dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+    // 무선 ADB (Kadb): 페어링/연결. Kotlin 2.1 로 빌드된 1.2.1 사용
+    implementation("com.flyfishxu:kadb:1.2.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 }

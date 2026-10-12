@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.10)
+project(jx11native)
+add_library(jx11native SHARED native.cpp)
+find_library(log-lib log)
+target_link_libraries(jx11native ${log-lib})

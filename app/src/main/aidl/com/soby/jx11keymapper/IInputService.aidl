@@ -15,4 +15,6 @@ interface IInputService {
     void sendKey(int keyCode) = 5;
     // 알림창 펼치기
     void expandNotifications() = 6;
+    // 장치 독점(원래 터치/스크롤 동작 막기). start() 전에 호출
+    void setGrab(boolean on) = 7;
 }

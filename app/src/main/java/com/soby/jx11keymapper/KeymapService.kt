@@ -25,6 +25,9 @@ class KeymapService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.soby.jx11keymapper.STOP"
+        const val BACKEND_AUTO = 0
+        const val BACKEND_SHIZUKU = 1
+        const val BACKEND_ADB = 2
         private const val CHANNEL = "keymap"
         private const val NID = 1
 
@@ -48,6 +51,12 @@ class KeymapService : Service() {
     private var bound = false
     private var started = false
     private var wl: PowerManager.WakeLock? = null
+
+    // 무선 ADB 방식
+    private val io: ExecutorService = Executors.newSingleThreadExecutor()
+    private var adbClient: SocketInput? = null
+    @Volatile private var adbConnecting = false
+    private var via = "Shizuku"
 
     // 동작 실행은 별도 단일 스레드에서 순서대로 (셸 호출이 이벤트 수신을 막지 않도록)
     private val exec: ExecutorService = Executors.newSingleThreadExecutor()
@@ -102,8 +111,10 @@ class KeymapService : Service() {
                 val svc = IInputService.Stub.asInterface(binder)
                 input = svc
                 Diag.i("BIND", "UserService 연결됨: ${svc.ping()}")
+                try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
-                setStatus("동작 중 (장치 필터 '${Cfg.deviceFilter}')")
+                via = "Shizuku"
+                setStatus("동작 중 · Shizuku (장치 필터 '${Cfg.deviceFilter}')")
             } catch (t: Throwable) {
                 Diag.e("BIND", "UserService 시작 실패", t)
                 setStatus("서비스 시작 실패: ${t.message}")
@@ -143,13 +154,23 @@ class KeymapService : Service() {
             Cfg.enabled = true
             Cfg.save()
             applyWake()
-            try {
-                Shizuku.addBinderReceivedListenerSticky(onBinder)
-                Shizuku.addBinderDeadListener(onDead)
-            } catch (t: Throwable) {
-                Diag.e("SHIZUKU", "리스너 등록 실패", t)
+            val b = Cfg.backend
+            Diag.i("SVC", "연결 방식: ${when (b) { BACKEND_SHIZUKU -> "Shizuku"; BACKEND_ADB -> "무선 ADB"; else -> "자동" }}")
+            if (b != BACKEND_ADB) {
+                try {
+                    Shizuku.addBinderReceivedListenerSticky(onBinder)
+                    Shizuku.addBinderDeadListener(onDead)
+                } catch (t: Throwable) {
+                    Diag.e("SHIZUKU", "리스너 등록 실패", t)
+                }
+                setStatus("Shizuku 연결 확인 중…")
             }
-            setStatus("Shizuku 연결 확인 중…")
+            if (b == BACKEND_ADB) {
+                connectAdb()
+            } else if (b == BACKEND_AUTO) {
+                // Shizuku 가 2초 안에 안 붙으면 무선 ADB 서버로 시도
+                main.postDelayed({ if (started && input == null && !bound) connectAdb() }, 2000)
+            }
         }
         return START_STICKY
     }
@@ -173,8 +194,15 @@ class KeymapService : Service() {
         } catch (t: Throwable) {
             Diag.w("BIND", "unbind 실패: ${t.message}")
         }
+        try {
+            adbClient?.close()   // 서버는 그대로 둔다 (다음에 바로 재접속)
+        } catch (t: Throwable) {
+            Diag.w("ADB", "클라이언트 닫기 실패: ${t.message}")
+        }
+        adbClient = null
         input = null
         bound = false
+        io.shutdownNow()
         exec.shutdownNow()
         try {
             if (wl?.isHeld == true) wl?.release()
@@ -196,6 +224,7 @@ class KeymapService : Service() {
 
     private fun tryBind() {
         if (!started) return
+        if (adbClient != null) return   // 이미 무선 ADB 로 연결됨
         try {
             if (!Shizuku.pingBinder()) {
                 setStatus("Shizuku 실행 안 됨 — Shizuku 앱에서 시작하세요")
@@ -222,6 +251,70 @@ class KeymapService : Service() {
         }
     }
 
+    // ───────── 무선 ADB 서버 접속 ─────────
+
+    fun reconnectAdb() {
+        main.post { connectAdb() }
+    }
+
+    private fun connectAdb() {
+        if (!started || adbConnecting || input != null) return
+        if (Cfg.backend == BACKEND_SHIZUKU) return
+        adbConnecting = true
+        io.execute {
+            try {
+                if (Cfg.adbPort == 0 || Cfg.adbToken.isEmpty()) {
+                    setStatus("무선 ADB 서버 없음 — 앱에서 [무선 ADB 연결]을 누르세요")
+                    retryAdb(5000)
+                    return@execute
+                }
+                val c = SocketInput(Cfg.adbPort, Cfg.adbToken) { why -> main.post { onAdbClosed(why) } }
+                when (val r = c.connect()) {
+                    SocketInput.Result.OK -> {
+                        c.setGrab(Cfg.grab)
+                        adbClient = c
+                        input = c
+                        c.start(Cfg.deviceFilter, callback)
+                        via = "무선 ADB"
+                        Diag.i("ADB", "서버 연결됨: ${c.ping()}")
+                        setStatus("동작 중 · 무선 ADB (장치 필터 '${Cfg.deviceFilter}')")
+                    }
+                    SocketInput.Result.OLD_VERSION -> {
+                        Diag.w("ADB", "서버 버전 ${c.serverVersion} ≠ 앱 ${BuildConfig.VERSION_CODE} → 서버 종료")
+                        c.destroy()
+                        setStatus("무선 ADB 서버가 구버전 — 앱에서 [무선 ADB 연결]로 새로 띄우세요")
+                    }
+                    else -> {
+                        Diag.w("ADB", "서버 접속 실패 $r: ${c.lastError}")
+                        setStatus(
+                            if (r == SocketInput.Result.NO_SERVER) "무선 ADB 서버가 꺼져 있음(재부팅 후?) — 앱에서 [무선 ADB 연결]"
+                            else "무선 ADB 서버 접속 실패: ${c.lastError}"
+                        )
+                        retryAdb(5000)
+                    }
+                }
+            } catch (t: Throwable) {
+                Diag.e("ADB", "서버 접속 중 오류", t)
+                retryAdb(5000)
+            } finally {
+                adbConnecting = false
+            }
+        }
+    }
+
+    private fun retryAdb(ms: Long) {
+        main.postDelayed({ if (started && input == null && !bound) connectAdb() }, ms)
+    }
+
+    private fun onAdbClosed(why: String) {
+        if (adbClient == null) return
+        Diag.w("ADB", "서버 연결 끊김: $why")
+        adbClient = null
+        input = null
+        setStatus("무선 ADB 서버 연결 끊김 — 재접속 시도")
+        retryAdb(3000)
+    }
+
     fun restartInput() {
         val svc = input
         if (svc == null) {
@@ -230,9 +323,10 @@ class KeymapService : Service() {
         }
         try {
             svc.stop()
-            svc.start(Cfg.deviceFilter, callback)
+            try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
+                svc.start(Cfg.deviceFilter, callback)
             Diag.i("SVC", "장치 필터 적용: '${Cfg.deviceFilter}'")
-            setStatus("동작 중 (장치 필터 '${Cfg.deviceFilter}')")
+            setStatus("동작 중 · $via (장치 필터 '${Cfg.deviceFilter}')")
         } catch (t: Throwable) {
             Diag.e("SVC", "restartInput 실패", t)
         }
