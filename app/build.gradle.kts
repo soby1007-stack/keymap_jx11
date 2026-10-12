@@ -12,8 +12,8 @@ android {
         minSdk = 26
         targetSdk = 34
         ndk { abiFilters += "arm64-v8a" }
-        versionCode = 7
-        versionName = "0.4.0"
+        versionCode = 8
+        versionName = "0.4.1"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)
@@ -44,6 +44,19 @@ android {
     }
     packaging {
         jniLibs { useLegacyPackaging = true }   // .so 를 파일로 추출 → shell 프로세스에서도 로드 가능
+        resources {
+            // BouncyCastle(Kadb 의존성) 등 라이브러리끼리 겹치는 메타 파일은 합치지 않고 제외
+            excludes += setOf(
+                "META-INF/versions/**/OSGI-INF/MANIFEST.MF",
+                "META-INF/{AL2.0,LGPL2.1}",
+                "META-INF/DEPENDENCIES",
+                "META-INF/INDEX.LIST",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/*.kotlin_module"
+            )
+            pickFirsts += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF")
+        }
     }
     buildFeatures {
         aidl = true
