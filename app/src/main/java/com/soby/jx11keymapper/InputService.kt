@@ -170,6 +170,25 @@ class InputService : IInputService.Stub() {
         }
     }
 
+    override fun grantUsageAccess(pkg: String) {
+        try {
+            if (!pkg.matches(Regex("[A-Za-z0-9_.]+"))) {
+                report("W", "SVC", "사용 기록 접근: 잘못된 패키지명 무시")
+                return
+            }
+            val p = Runtime.getRuntime().exec(arrayOf("appops", "set", pkg, "GET_USAGE_STATS", "allow"))
+            val rc = p.waitFor()
+            val err = p.errorStream.bufferedReader().readText().trim()
+            report(if (rc == 0) "I" else "W", "SVC", "사용 기록 접근 허용(앞 앱 감지) rc=$rc ${err.take(200)}")
+            // E-ink 새로고침(다른 앱 위에 표시) 권한도 같이 허용
+            val p2 = Runtime.getRuntime().exec(arrayOf("appops", "set", pkg, "SYSTEM_ALERT_WINDOW", "allow"))
+            val rc2 = p2.waitFor()
+            report(if (rc2 == 0) "I" else "W", "SVC", "다른 앱 위에 표시 허용(E-ink 새로고침) rc=$rc2 ${p2.errorStream.bufferedReader().readText().trim().take(200)}")
+        } catch (e: Throwable) {
+            report("E", "SVC", "사용 기록 접근 허용 실패: ${chain(e)}")
+        }
+    }
+
     @Volatile
     private var cb: IEventCallback? = null
 

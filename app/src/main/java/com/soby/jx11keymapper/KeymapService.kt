@@ -36,6 +36,7 @@ class KeymapService : Service() {
         @Volatile var devices: String = ""
         @Volatile var eventCount: Long = 0L
         @Volatile var lastEvent: String = "-"
+        @Volatile var usageOk: Boolean = false   // 앞 앱 감지 권한(사용 기록 접근) 여부
 
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, KeymapService::class.java))
@@ -60,6 +61,10 @@ class KeymapService : Service() {
 
     // 동작 실행은 별도 단일 스레드에서 순서대로 (셸 호출이 이벤트 수신을 막지 않도록)
     private val exec: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // 앞 앱 감지 → 앱에 연결된 프리셋으로 자동 전환
+    private val poller = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var pollerStarted = false
 
     val engine = Engine { act, n ->
         exec.execute { ActionRunner.run(applicationContext, act, n, input) }
@@ -114,6 +119,7 @@ class KeymapService : Service() {
                 try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
                 try { svc.setImeWithHardKeyboard(Cfg.imeWithKeyboard) } catch (t: Throwable) { Diag.w("SVC", "화면 키보드 설정 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
+                grantUsage()
                 via = "Shizuku"
                 setStatus("동작 중 · Shizuku (장치 필터 '${Cfg.deviceFilter}')")
             } catch (t: Throwable) {
@@ -155,6 +161,7 @@ class KeymapService : Service() {
             Cfg.enabled = true
             Cfg.save()
             applyWake()
+            startPoller()
             val b = Cfg.backend
             Diag.i("SVC", "연결 방식: ${when (b) { BACKEND_SHIZUKU -> "Shizuku"; BACKEND_ADB -> "무선 ADB"; else -> "자동" }}")
             if (b != BACKEND_ADB) {
@@ -205,6 +212,7 @@ class KeymapService : Service() {
         bound = false
         io.shutdownNow()
         exec.shutdownNow()
+        poller.shutdownNow()
         try {
             if (wl?.isHeld == true) wl?.release()
         } catch (t: Throwable) {
@@ -277,6 +285,7 @@ class KeymapService : Service() {
                         adbClient = c
                         input = c
                         c.start(Cfg.deviceFilter, callback)
+                        grantUsage()
                         via = "무선 ADB"
                         Diag.i("ADB", "서버 연결됨: ${c.ping()}")
                         setStatus("동작 중 · 무선 ADB (장치 필터 '${Cfg.deviceFilter}')")
@@ -315,6 +324,39 @@ class KeymapService : Service() {
         input = null
         setStatus("무선 ADB 서버 연결 끊김 — 재접속 시도")
         retryAdb(3000)
+    }
+
+    /** 앞 앱 감지에 필요한 '사용 기록 접근'을 셸 권한으로 허용 (연결될 때마다 한 번) */
+    private fun grantUsage() {
+        val svc = input ?: return
+        io.execute {
+            try {
+                svc.grantUsageAccess(packageName)
+                Thread.sleep(400)
+                usageOk = ForegroundApp.hasAccess(this)
+                Diag.i("FG", "사용 기록 접근(앞 앱 감지): ${if (usageOk) "허용됨" else "확인 안 됨(구버전 서비스?)"}")
+            } catch (t: Throwable) {
+                Diag.w("FG", "사용 기록 접근 허용 실패: ${t.message}")
+            }
+        }
+    }
+
+    private fun startPoller() {
+        if (pollerStarted) return
+        pollerStarted = true
+        poller.scheduleWithFixedDelay({
+            try {
+                usageOk = ForegroundApp.hasAccess(this)
+                val linked = Cfg.presets.any { it.apps.isNotEmpty() }
+                if (linked && usageOk) {
+                    val before = Cfg.runtimeId
+                    Cfg.setRuntimePackage(ForegroundApp.current(this))
+                    if (Cfg.runtimeId != before) engine.reset()
+                }
+            } catch (t: Throwable) {
+                Diag.w("FG", "앞 앱 확인 오류: ${t.message}")
+            }
+        }, 1000, 1000, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     /** 물리 키보드 연결 중 화면 키보드 표시 설정을 셸 권한으로 적용 */
@@ -380,6 +422,8 @@ class KeymapService : Service() {
             eventCount++
             lastEvent = "$dev · ${EventNames.typeName(type)} ${EventNames.codeName(type, code)} $value"
             Diag.v("EVENT", lastEvent)
+            EventMonitor.add(dev, type, code, value)
+            RingEvents.onEvent(type, code, value)
             if (Learner.offer(type, code, value)) return
             val hit = Mapper.classify(type, code, value) ?: return
             Diag.v("MAP", "${hit.act.label} 가중치 ${hit.weight}")

@@ -38,6 +38,16 @@ class MainActivity : Activity() {
     private lateinit var tvDevices: TextView
     private lateinit var tvLearn: TextView
     private lateinit var tableBox: LinearLayout
+    private lateinit var tvPreset: TextView
+    private lateinit var ring: RingView
+    private lateinit var btnPreset: Button
+    private lateinit var partsBox: LinearLayout
+    private lateinit var othersBox: LinearLayout
+    private lateinit var tvNow: TextView
+    private lateinit var btnOther: Button
+    private lateinit var presetBox: LinearLayout
+    private var tvUsage: TextView? = null
+    private lateinit var tvMonitor: TextView
     private lateinit var swRun: Switch
     private lateinit var tvHint: TextView
     private lateinit var dot: View
@@ -144,6 +154,15 @@ class MainActivity : Activity() {
             ellipsize = TextUtils.TruncateAt.END
         }
         statusCard.addView(tvLive)
+        tvPreset = TextView(this).apply {
+            textSize = 13f
+            setTextColor(cAccent)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(6), 0, 0)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        statusCard.addView(tvPreset)
         header.addView(statusCard)
         tvLearn = TextView(this).apply {
             textSize = 15f
@@ -165,11 +184,11 @@ class MainActivity : Activity() {
             background = rounded(0xFFE4E8F0.toInt(), 12)
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        val tabNames = arrayOf("키 매핑", "민감도", "연결", "설정")
+        val tabNames = arrayOf("JX-11", "프리셋", "연결", "설정", "범용기기")
         for (i in tabNames.indices) {
             val t = TextView(this).apply {
                 text = tabNames[i]
-                textSize = 14f
+                textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(10), 0, dp(10))
                 setOnClickListener { selectTab(i) }
@@ -185,7 +204,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(28))
         }
-        for (i in 0 until 4) {
+        for (i in 0 until 5) {
             val v = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             tabViews.add(v)
             content.addView(v)
@@ -193,10 +212,11 @@ class MainActivity : Activity() {
         page.addView(ScrollView(this).apply { addView(content) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        buildMappingTab(tabViews[0])
-        buildSensitivityTab(tabViews[1])
+        buildRingTab(tabViews[0])
+        presetBox = tabViews[1]
         buildConnectionTab(tabViews[2])
         buildSettingsTab(tabViews[3])
+        buildGenericTab(tabViews[4])
         selectTab(lastTab)
 
         setContentView(page)
@@ -215,49 +235,436 @@ class MainActivity : Activity() {
 
     // ───────── 탭 내용 ─────────
 
-    private fun buildMappingTab(box: LinearLayout) {
-        box.addView(sectionTitle("키 매핑 (JX-11)"))
-        box.addView(note("기능에 JX-11 입력을 연결해요. ＋ 누르고 JX-11을 조작하면 등록, － 는 목록에서 체크를 해제하면 삭제돼요. 같은 입력은 한 기능에만 지정돼요."))
-        val c = card()
-        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        c.addView(tableBox)
-        box.addView(c)
-        box.addView(pill("＋ 기능 추가", 0) { pickActToAdd() }, fullWidth())
-        box.addView(pill("표 기본값으로", 1) {
-            AlertDialog.Builder(this)
-                .setTitle("기본값으로 되돌릴까요?")
-                .setMessage("지금 지정한 입력이 모두 사라지고 기본 설정(스와이프 ↑↓ 등)으로 돌아갑니다.")
-                .setPositiveButton("되돌리기") { _, _ ->
-                    Cfg.resetRules()
-                    toast("기본값으로 복원")
-                }
-                .setNegativeButton("취소", null)
-                .show()
-        }, fullWidth())
+    // ───────── JX-11 탭 ─────────
+
+    private fun buildRingTab(box: LinearLayout) {
+        box.addView(sectionTitle("편집 중인 프리셋"))
+        btnPreset = pill("", 1) { choosePresetToEdit() }
+        box.addView(btnPreset, fullWidth())
+
+        box.addView(sectionTitle("JX-11"))
+        box.addView(note("그림에서 부위를 누르면 기능을 고를 수 있어요. JX-11을 직접 조작하면 눌린 부위가 주황색으로 칠해지고, 휠은 실제로 굴린 방향 화살표가 나와요. (파란색 = 이미 지정됨)"))
+        val rc = card()
+        ring = RingView(this)
+        ring.onPart = { p -> pickActForRule("${p.title}  (${p.hint})", p.rule()) }
+        rc.addView(ring, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        tvNow = TextView(this).apply {
+            textSize = 13f
+            setTextColor(cSub)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(2))
+        }
+        rc.addView(tvNow)
+        box.addView(rc)
+
+        box.addView(sectionTitle("부위별 기능"))
+        val pc = card()
+        partsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pc.addView(partsBox)
+        box.addView(pc)
+
+        btnOther = pill("", 2) {
+            val r = RingEvents.lastOther
+            if (r != null) pickActForRule("그림에 없는 입력: ${r.label()}", r)
+        }
+        btnOther.visibility = View.GONE
+        box.addView(btnOther, fullWidth())
+
+        othersBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(othersBox)
+
+        box.addView(pill("기능 먼저 고르고 → JX-11을 눌러서 지정", 1) { pickActToAdd() }, fullWidth())
     }
 
-    private fun buildSensitivityTab(box: LinearLayout) {
-        box.addView(sectionTitle("민감도"))
+    private fun renderRing() {
+        val e = Cfg.editing
+        btnPreset.text = if (e == null) "프리셋 없음 — [프리셋] 탭에서 만들어요"
+        else "프리셋: ${e.name}" + (if (e.id == Cfg.runtimeId) "  · 적용 중" else "") + "   (눌러서 바꾸기)"
+
+        val assigned = HashSet<Part>()
+        partsBox.removeAllViews()
+        othersBox.removeAllViews()
+        if (e == null) {
+            ring.assigned = emptySet()
+            ring.invalidate()
+            partsBox.addView(TextView(this).apply {
+                text = "프리셋이 없어요. [프리셋] 탭에서 새 프리셋을 만드세요."
+                textSize = 14f
+                setTextColor(cSub)
+                setPadding(dp(4), dp(12), dp(4), dp(12))
+            })
+            return
+        }
+        val parts = Part.values()
+        parts.forEachIndexed { i, p ->
+            val act = Act.values().firstOrNull { p.rule() in e.rules(it) }
+            if (act != null) assigned.add(p)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { pickActForRule("${p.title}  (${p.hint})", p.rule()) }
+            }
+            val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(TextView(this).apply {
+                text = p.title
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(cText)
+            })
+            left.addView(TextView(this).apply {
+                text = "입력: ${p.hint}"
+                textSize = 12f
+                setTextColor(cSub)
+            })
+            row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(
+                if (act != null) chip(act.label) else TextView(this).apply {
+                    text = "미지정"
+                    textSize = 13f
+                    setTextColor(cSub)
+                }
+            )
+            partsBox.addView(row)
+            if (i < parts.size - 1) divider(partsBox)
+        }
+        ring.assigned = assigned
+        ring.invalidate()
+
+        // 그림에 없는 입력으로 지정된 것들
+        val extras = ArrayList<Pair<Act, Rule>>()
+        for (a in Act.values()) for (r in e.rules(a)) if (Part.of(r) == null) extras.add(a to r)
+        if (extras.isNotEmpty()) {
+            othersBox.addView(sectionTitle("그림에 없는 입력"))
+            val c = card()
+            extras.forEachIndexed { i, (a, r) ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(8), 0, dp(8))
+                }
+                row.addView(TextView(this).apply {
+                    text = "${r.label()}  →  ${a.label}"
+                    textSize = 14f
+                    setTextColor(cText)
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(roundIcon("－", cBad) { Cfg.removeRule(a, r) },
+                    LinearLayout.LayoutParams(dp(40), dp(40)))
+                c.addView(row)
+                if (i < extras.size - 1) divider(c)
+            }
+            othersBox.addView(c)
+        }
+    }
+
+    /** 이 입력(rule)에 연결할 기능을 목록에서 고른다. 같은 입력은 한 기능에만 지정돼요 */
+    private fun pickActForRule(title: String, rule: Rule) {
+        val e = Cfg.editing
+        if (e == null) {
+            toast("프리셋이 없어요. [프리셋] 탭에서 만드세요")
+            return
+        }
+        val acts = Act.values()
+        val cur = acts.firstOrNull { rule in e.rules(it) }
+        val names = arrayOf("지정 안 함") + acts.map { (if (it == cur) "✓ " else "") + it.label }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(names) { _, which ->
+                if (which == 0) {
+                    Cfg.removeRuleEverywhere(rule)
+                    Diag.i("UI", "지정 해제: ${rule.label()}")
+                    toast("지정 해제")
+                } else {
+                    val a = acts[which - 1]
+                    Cfg.addRule(a, rule)
+                    Diag.i("UI", "지정: ${rule.label()} → ${a.label} (프리셋 ${e.name})")
+                    toast("'${a.label}'에 지정")
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun choosePresetToEdit() {
+        val ps = Cfg.presets
+        if (ps.isEmpty()) {
+            selectTab(1)
+            return
+        }
+        val names = ps.map { it.name + (if (it.id == Cfg.runtimeId) "  (적용 중)" else "") }.toTypedArray()
+        val cur = ps.indexOfFirst { it.id == Cfg.editing?.id }
+        AlertDialog.Builder(this)
+            .setTitle("편집할 프리셋")
+            .setSingleChoiceItems(names, cur) { d, which ->
+                Cfg.selectEdit(ps[which].id)
+                d.dismiss()
+            }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    // ───────── 프리셋 탭 ─────────
+
+    private fun renderPresetTab() {
+        val box = presetBox
+        box.removeAllViews()
+        tvUsage = null
+
+        box.addView(sectionTitle("프리셋"))
+        box.addView(note("프리셋마다 키 지정과 감도를 따로 가져요. 앱을 연결해 두면 그 앱이 화면에 있을 때 자동으로 바뀌어요. 눌러서 편집할 프리셋을 고르세요."))
+        val lc = card()
+        val ps = Cfg.presets
+        if (ps.isEmpty()) {
+            lc.addView(TextView(this).apply {
+                text = "프리셋이 없어요. 아래 [＋ 새 프리셋]을 눌러 만드세요."
+                textSize = 14f
+                setTextColor(cSub)
+                setPadding(dp(4), dp(12), dp(4), dp(12))
+            })
+        }
+        ps.forEachIndexed { i, p ->
+            val editing = p.id == Cfg.editing?.id
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { Cfg.selectEdit(p.id) }
+            }
+            val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(TextView(this).apply {
+                text = (if (editing) "✓ " else "") + p.name
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(if (editing) cAccent else cText)
+            })
+            val sub = ArrayList<String>()
+            sub.add(if (p.apps.isEmpty()) "연결된 앱 없음" else "앱 ${p.apps.size}개 연결")
+            if (p.fallback) sub.add("나머지 모든 앱")
+            val n = p.map.values.sumOf { it.size }
+            sub.add("지정 ${n}개")
+            left.addView(TextView(this).apply {
+                text = sub.joinToString(" · ")
+                textSize = 12f
+                setTextColor(cSub)
+            })
+            row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (p.id == Cfg.runtimeId) row.addView(chip("적용 중"))
+            lc.addView(row)
+            if (i < ps.size - 1) divider(lc)
+        }
+        box.addView(lc)
+        box.addView(row(
+            pill("＋ 새 프리셋", 0) {
+                askName("새 프리셋 이름", "프리셋 ${Cfg.presets.size + 1}") { n ->
+                    Cfg.newPreset(n)
+                    toast("'$n' 만들었어요")
+                }
+            },
+            pill("이름 변경", 1) {
+                val e = Cfg.editing
+                if (e == null) toast("프리셋이 없어요") else askName("이름 변경", e.name) { n -> Cfg.renamePreset(e.id, n) }
+            },
+            pill("삭제", 2) { deleteEditingPreset() }
+        ))
+
+        val e = Cfg.editing ?: return
+
+        box.addView(sectionTitle("'${e.name}' 적용 대상"))
+        val ac = card()
+        val appText = if (e.apps.isEmpty()) "연결된 앱 없음" else e.apps.joinToString(", ") { appLabel(it) }
+        ac.addView(TextView(this).apply {
+            text = appText
+            textSize = 14f
+            setTextColor(cText)
+            setPadding(0, dp(8), 0, dp(8))
+        })
+        box.addView(ac)
+        box.addView(pill("앱 연결 편집", 0) { editApps(e) }, fullWidth())
+        val fc = card()
+        switchRowRaw(fc, "연결되지 않은 모든 앱에 적용", "다른 프리셋에 연결되지 않은 앱에서는 이 프리셋을 써요 (하나의 프리셋만 가능)", e.fallback) { on ->
+            Cfg.setFallback(e.id, on)
+        }
+        divider(fc)
+        tvUsage = TextView(this).apply {
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(10), 0, dp(6))
+        }
+        fc.addView(tvUsage)
+        box.addView(fc, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+
+        box.addView(sectionTitle("'${e.name}' 감도"))
         val c = card()
         sliderRow(c, "이동 감도", "휠을 이만큼 움직일 때마다 동작 1회. 작을수록 민감해요. (휠 한 칸 ≈ 150~180‰)", 29,
-            { ((Cfg.swipeUnitPermille / 10) - 1).coerceIn(0, 29) },
-            { Cfg.swipeUnitPermille = (it + 1) * 10 },
+            { ((e.unit / 10) - 1).coerceIn(0, 29) },
+            { v -> Cfg.updateEditing(false) { it.copy(unit = (v + 1) * 10) } },
             { "${(it + 1) * 10}‰" })
         divider(c)
         sliderRow(c, "연속 동작 간격", "연속 동작 사이의 최소 간격. 작을수록 빠르게 반복돼요.", 50,
-            { (Cfg.cooldownMs / 10).coerceIn(0, 50) },
-            { Cfg.cooldownMs = it * 10 },
+            { (e.cooldown / 10).coerceIn(0, 50) },
+            { v -> Cfg.updateEditing(false) { it.copy(cooldown = v * 10) } },
             { "${it * 10}ms" })
         divider(c)
         sliderRow(c, "동작 1회당 반복 횟수", "한 번 동작할 때 볼륨·방향키·페이지 키를 몇 번 누를지", 49,
-            { (Cfg.stepsPerFire - 1).coerceIn(0, 49) },
-            { Cfg.stepsPerFire = it + 1 },
+            { (e.steps - 1).coerceIn(0, 49) },
+            { v -> Cfg.updateEditing(false) { it.copy(steps = v + 1) } },
             { "${it + 1}번" })
         box.addView(c)
         box.addView(pill("볼륨 테스트 ↑↓", 1) {
             VolumeAction.apply(this, true, 1)
             h.postDelayed({ VolumeAction.apply(this, false, 1) }, 600)
         }, fullWidth())
+    }
+
+    private fun deleteEditingPreset() {
+        val e = Cfg.editing
+        if (e == null) {
+            toast("프리셋이 없어요")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("'${e.name}' 삭제")
+            .setMessage("이 프리셋의 키 지정, 감도, 앱 연결이 모두 사라져요.")
+            .setPositiveButton("삭제") { _, _ ->
+                Cfg.deletePreset(e.id)
+                Diag.i("UI", "프리셋 삭제: ${e.name}")
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun askName(title: String, init: String, ok: (String) -> Unit) {
+        val et = EditText(this).apply {
+            setSingleLine()
+            setText(init)
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(et)
+            .setPositiveButton("확인") { _, _ ->
+                val n = et.text.toString().trim()
+                if (n.isNotEmpty()) ok(n)
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private val labelCache = HashMap<String, String>()
+
+    private fun appLabel(pkg: String): String = labelCache.getOrPut(pkg) {
+        try {
+            packageManager.getApplicationInfo(pkg, 0).loadLabel(packageManager).toString()
+        } catch (t: Throwable) {
+            pkg
+        }
+    }
+
+    /** 실행 가능한 앱 목록에서 이 프리셋에 연결할 앱을 체크 */
+    private fun editApps(e: Preset) {
+        toast("앱 목록 불러오는 중…")
+        Thread {
+            val list: List<Pair<String, String>> = try {
+                val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                val found = packageManager.queryIntentActivities(i, 0)
+                    .map { it.activityInfo.packageName to it.loadLabel(packageManager).toString() }
+                    .filter { it.first != packageName }
+                    .toMutableList()
+                for (p in e.apps) if (found.none { it.first == p }) found.add(p to p)
+                found.distinctBy { it.first }.sortedBy { it.second.lowercase() }
+            } catch (t: Throwable) {
+                Diag.e("UI", "앱 목록 실패", t)
+                emptyList()
+            }
+            runOnUiThread {
+                if (list.isEmpty()) {
+                    toast("앱 목록을 가져오지 못했어요 (로그 확인)")
+                    return@runOnUiThread
+                }
+                val others = Cfg.presets.filter { it.id != e.id }
+                val labels = list.map { (pkg, name) ->
+                    val o = others.firstOrNull { pkg in it.apps }
+                    if (o != null) "$name  · ${o.name}" else name
+                }.toTypedArray()
+                val checked = BooleanArray(list.size) { list[it].first in e.apps }
+                AlertDialog.Builder(this)
+                    .setTitle("'${e.name}'에 연결할 앱")
+                    .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
+                    .setPositiveButton("적용") { _, _ ->
+                        val sel = list.indices.filter { checked[it] }.map { list[it].first }
+                        Cfg.setApps(e.id, sel)
+                        Diag.i("UI", "앱 연결: ${e.name} ← ${sel.size}개")
+                        toast("앱 ${sel.size}개 연결 (다른 프리셋에 있던 앱은 이쪽으로 옮겨졌어요)")
+                    }
+                    .setNegativeButton("취소", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    // ───────── 범용기기 탭 ─────────
+
+    private fun buildGenericTab(box: LinearLayout) {
+        box.addView(sectionTitle("입력 장치"))
+        val c4 = card()
+        c4.addView(note("장치 이름에 이 글자가 들어 있으면 읽어요 (비우면 전체). JX-11 외의 기기도 여기서 확인할 수 있어요."))
+        etFilter = EditText(this).apply {
+            setSingleLine()
+            setText(Cfg.deviceFilter)
+            hint = "예: JX"
+        }
+        c4.addView(etFilter)
+        box.addView(c4)
+        box.addView(row(
+            pill("적용", 0) { applyFilter() },
+            pill("장치 목록", 1) { showDeviceList() }
+        ))
+
+        box.addView(sectionTitle("입력 모니터 (원본 값)"))
+        box.addView(note("수신한 입력이 최근 것부터 보여요. 새로운 키의 코드를 알아낼 때 쓰세요."))
+        val mc = card()
+        tvMonitor = TextView(this).apply {
+            textSize = 11f
+            setTextColor(cText)
+            typeface = Typeface.MONOSPACE
+            minLines = 6
+        }
+        mc.addView(tvMonitor)
+        box.addView(mc)
+        box.addView(pill("지우기", 1) { EventMonitor.clear(); tvMonitor.text = "" }, fullWidth())
+
+        box.addView(sectionTitle("전체 기능 표 (고급)"))
+        box.addView(note("편집 중인 프리셋의 모든 지정이에요. ＋ 누르고 기기를 조작하면 등록, － 는 목록에서 체크를 해제하면 삭제돼요."))
+        val c = card()
+        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        c.addView(tableBox)
+        box.addView(c)
+        box.addView(pill("＋ 기능 추가", 0) { pickActToAdd() }, fullWidth())
+    }
+
+    /** 제목 + 설명 + 스위치 (값은 즉시 호출, 저장은 호출한 쪽에서) */
+    private fun switchRowRaw(parent: LinearLayout, name: String, desc: String, on: Boolean, set: (Boolean) -> Unit) {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(TextView(this).apply { text = name; textSize = 15f; setTextColor(cText) })
+        texts.addView(TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(2), 0, 0)
+        })
+        r.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) })
+        r.addView(Switch(this).apply {
+            isChecked = on
+            setOnCheckedChangeListener { _, c -> set(c) }
+        })
+        parent.addView(r)
     }
 
     private fun buildConnectionTab(box: LinearLayout) {
@@ -310,6 +717,12 @@ class MainActivity : Activity() {
         switchRow(c2, "볼륨 UI 표시", "볼륨이 바뀔 때 화면에 볼륨 바를 보여줘요", { Cfg.showUi }) { Cfg.showUi = it }
         box.addView(c2)
 
+        box.addView(sectionTitle("E-ink 새로고침"))
+        val ce = card()
+        ce.addView(note("전체 화면을 검정→흰색으로 잠깐 덮어 잔상을 지워요. 기능 목록의 'E-ink 화면 새로고침'에 JX-11 키를 지정해 쓰세요. '다른 앱 위에 표시' 권한이 필요하고, 셸 연결 때 자동 허용돼요."))
+        box.addView(ce)
+        box.addView(pill("새로고침 테스트", 1) { EinkRefresh.test(this) }, fullWidth())
+
         box.addView(sectionTitle("시스템"))
         val c3 = card()
         switchRow(c3, "화면이 꺼져도 동작", "배터리를 더 사용해요", { Cfg.wakeLock }) {
@@ -317,21 +730,6 @@ class MainActivity : Activity() {
             KeymapService.instance?.applyWake()
         }
         box.addView(c3)
-
-        box.addView(sectionTitle("입력 장치"))
-        val c4 = card()
-        c4.addView(note("장치 이름에 이 글자가 들어 있으면 읽어요 (비우면 전체)"))
-        etFilter = EditText(this).apply {
-            setSingleLine()
-            setText(Cfg.deviceFilter)
-            hint = "예: JX"
-        }
-        c4.addView(etFilter)
-        box.addView(c4)
-        box.addView(row(
-            pill("적용", 0) { applyFilter() },
-            pill("장치 목록", 1) { showDeviceList() }
-        ))
 
         box.addView(sectionTitle("도구"))
         box.addView(pill("로그 보기", 1) { startActivity(Intent(this, LogActivity::class.java)) }, fullWidth())
@@ -498,10 +896,32 @@ class MainActivity : Activity() {
         tvLive.text = "수신 ${KeymapService.eventCount} · 동작 $fires · 마지막: ${KeymapService.lastEvent}"
         tvDevices.text = "감지 장치: " + (if (KeymapService.devices.isEmpty()) "없음" else KeymapService.devices)
 
-        if (renderedVersion != Cfg.mapVersion) {
-            renderedVersion = Cfg.mapVersion
+        val key = Cfg.mapVersion * 31 + Cfg.runtimeId.hashCode()
+        if (renderedVersion != key) {
+            renderedVersion = key
+            renderRing()
+            renderPresetTab()
             renderTable()
         }
+        val rp = Cfg.presets.firstOrNull { it.id == Cfg.runtimeId }
+        val ed = Cfg.editing
+        tvPreset.text = "적용 중: ${rp?.name ?: "없음"}" +
+            (if (Cfg.runtimePkg.isNotEmpty() && Cfg.presets.any { it.apps.isNotEmpty() }) " · 앞 앱 ${appLabel(Cfg.runtimePkg)}" else "") +
+            (if (ed != null && ed.id != rp?.id) "   (편집 중: ${ed.name})" else "")
+        val lp = RingEvents.lastPart
+        tvNow.text = if (lp != null && android.os.SystemClock.elapsedRealtime() - RingEvents.lastTime < 4000)
+            "방금: ${lp.title}  (${lp.hint})" else "JX-11을 조작해 보세요"
+        val ro = RingEvents.lastOther
+        val edp = Cfg.editing
+        if (ro != null && edp != null && Act.values().none { ro in edp.rules(it) }) {
+            btnOther.text = "그림에 없는 입력 감지: ${ro.label()} — 눌러서 지정"
+            btnOther.visibility = View.VISIBLE
+        } else {
+            btnOther.visibility = View.GONE
+        }
+        tvUsage?.text = if (KeymapService.usageOk) "✅ 앞 앱 감지 가능 (사용 기록 접근이 자동 허용됨)"
+            else "⚠ 앞 앱 감지 권한 없음 — 키맵퍼를 켜고 셸(무선 ADB/Shizuku)에 연결하면 자동으로 허용돼요. 그 전에는 '나머지 모든 앱' 프리셋만 적용돼요."
+        if (lastTab == 4) tvMonitor.text = EventMonitor.snapshot(25)
         val a = Learner.act
         if (Learner.active && a != null) {
             tvLearn.text = if (Learner.deleteMode) {

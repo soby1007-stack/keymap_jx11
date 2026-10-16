@@ -2,6 +2,25 @@ package com.soby.jx11keymapper
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * 프리셋: 키 매핑 + 감도 묶음. apps 에 연결된 앱이 화면 앞에 있으면 이 프리셋이 적용된다.
+ * fallback=true 인 프리셋은 어떤 프리셋에도 연결되지 않은 앱에서 쓰인다 (사용자가 직접 켠 경우만).
+ */
+data class Preset(
+    val id: String,
+    val name: String,
+    val map: Map<Act, List<Rule>> = emptyMap(),
+    val apps: List<String> = emptyList(),
+    val fallback: Boolean = false,
+    val unit: Int = 100,        // 스와이프가 이만큼(‰) 움직일 때마다 동작 1회
+    val cooldown: Int = 120,    // 동작 간 최소 간격(ms)
+    val steps: Int = 1          // 동작 1회당 반복 횟수
+) {
+    fun rules(a: Act): List<Rule> = map[a] ?: emptyList()
+}
 
 /** 앱 설정 (메인 프로세스 전용 싱글톤). 값은 즉시 반영되고 save()로 저장. */
 object Cfg {
@@ -11,36 +30,155 @@ object Cfg {
     @Volatile var adbPort: Int = 0              // 무선 ADB 서버(AdbServer) 로컬 포트
     @Volatile var adbToken: String = ""         // 서버 접속 토큰
     @Volatile var deviceFilter: String = "JX"
-    @Volatile var map: Map<Act, List<Rule>> = defaultMap()   // 기능별 입력 규칙 (표의 내용)
-    @Volatile var mapVersion: Int = 0                        // 표가 바뀌면 증가 → 화면 다시 그림
-    @Volatile var threshold: Float = 1.0f       // 동작 1회에 필요한 스크롤량(클수록 둔감)
-    @Volatile var swipeMinPermille: Int = 15    // 스와이프로 인정하는 최소 이동량 (화면 범위 대비 ‰)
-    @Volatile var swipeUnitPermille: Int = 100  // 스와이프가 이만큼(‰) 움직일 때마다 동작 1회 (휠 한 칸 ≈ 150~180‰)
-    @Volatile var cooldownMs: Int = 120         // 동작 간 최소 간격
-    @Volatile var idleResetMs: Int = 400        // 이 시간 멈추면 누적 초기화
-    @Volatile var stepsPerFire: Int = 1         // 볼륨/방향키 1회 동작당 반복 수
-    @Volatile var mediaFixed: Boolean = false   // true: 미디어 볼륨 고정, false: 볼륨키와 동일(활성 스트림)
+    @Volatile var mapVersion: Int = 0           // 프리셋/표가 바뀌면 증가 → 화면 다시 그림
+    @Volatile var threshold: Float = 1.0f       // 동작 1회에 필요한 누적량 (1.0 고정)
+    @Volatile var swipeMinPermille: Int = 15    // 입력 등록(학습) 때 스와이프로 인정하는 최소 이동량 (‰)
+    @Volatile var idleResetMs: Int = 800        // 이 시간 멈추면 누적 초기화
+    @Volatile var mediaFixed: Boolean = false   // true: 미디어 볼륨만 직접 조절
     @Volatile var volumeKey: Boolean = true     // true: 볼륨을 키 입력으로 주입(이북 페이지 넘김 등), false: AudioManager 직접 조절
     @Volatile var grab: Boolean = true          // JX-11 독점: 원래 터치/스크롤 동작 막기 (EVIOCGRAB)
-    @Volatile var imeWithKeyboard: Boolean = true  // JX-11 연결 중에도 화면 키보드 표시 (물리 키보드로 인식돼 키보드가 숨겨지는 것 방지)
+    @Volatile var imeWithKeyboard: Boolean = true  // JX-11 연결 중에도 화면 키보드 표시
     @Volatile var showUi: Boolean = true
     @Volatile var wakeLock: Boolean = true
     @Volatile var enabled: Boolean = false      // 사용자가 켜 둔 상태
 
-    fun defaultMap(): Map<Act, List<Rule>> {
-        val m = LinkedHashMap<Act, List<Rule>>()
-        for (a in Act.values()) m[a] = emptyList()
-        m[Act.VOL_UP] = Rule.decodeList("2:8:+,1:104:*,100:1:*")     // REL_WHEEL(+), KEY_PAGEUP, 스와이프 ↑
-        m[Act.VOL_DOWN] = Rule.decodeList("2:8:-,1:109:*,100:2:*")   // REL_WHEEL(-), KEY_PAGEDOWN, 스와이프 ↓
-        return m
+    // ── 프리셋 ──
+    @Volatile var presets: List<Preset> = emptyList()
+    @Volatile var editId: String = ""           // 화면에서 편집 중인 프리셋
+    @Volatile var runtimeId: String = ""        // 지금 실제로 적용 중인 프리셋 (앞에 있는 앱 기준)
+    @Volatile var runtimePkg: String = ""       // 마지막으로 확인한 앞 앱
+
+    // ── 지금 적용 중인 값 (적용 프리셋에서 복사됨. 입력 처리가 이 값을 쓴다) ──
+    @Volatile var map: Map<Act, List<Rule>> = emptyMap()
+    @Volatile var swipeUnitPermille: Int = 100
+    @Volatile var cooldownMs: Int = 120
+    @Volatile var stepsPerFire: Int = 1
+
+    // ───────── 프리셋 선택/적용 ─────────
+
+    val editing: Preset?
+        get() = presets.firstOrNull { it.id == editId } ?: presets.firstOrNull()
+
+    /** 편집 중인 프리셋에서 이 기능에 지정된 입력 */
+    fun rulesOf(a: Act): List<Rule> = editing?.rules(a) ?: emptyList()
+
+    fun resolve(pkg: String?): Preset? {
+        val ps = presets
+        if (pkg != null) {
+            val m = ps.firstOrNull { pkg in it.apps }
+            if (m != null) return m
+        }
+        return ps.firstOrNull { it.fallback }
     }
 
-    fun rulesOf(a: Act): List<Rule> = map[a] ?: emptyList()
+    @Synchronized
+    fun setRuntimePackage(pkg: String?) {
+        runtimePkg = pkg ?: ""
+        applyRuntime(resolve(pkg))
+    }
 
-    private fun encodeMap(m: Map<Act, List<Rule>>): String =
+    @Synchronized
+    fun refreshRuntime() {
+        setRuntimePackage(if (runtimePkg.isEmpty()) null else runtimePkg)
+    }
+
+    private fun applyRuntime(p: Preset?) {
+        val changed = (p?.id ?: "") != runtimeId
+        runtimeId = p?.id ?: ""
+        map = p?.map ?: emptyMap()
+        swipeUnitPermille = p?.unit ?: 100
+        cooldownMs = p?.cooldown ?: 120
+        stepsPerFire = p?.steps ?: 1
+        if (changed) Diag.i("PRESET", "적용 프리셋: ${p?.name ?: "없음"} (앞 앱 ${if (runtimePkg.isEmpty()) "?" else runtimePkg})")
+    }
+
+    // ───────── 프리셋 편집 ─────────
+
+    @Synchronized
+    private fun commit(list: List<Preset>, bump: Boolean = true) {
+        presets = list
+        if (presets.none { it.id == editId }) editId = presets.firstOrNull()?.id ?: ""
+        if (bump) mapVersion++
+        save()
+        refreshRuntime()
+    }
+
+    /** 편집 중인 프리셋을 바꾼다 */
+    fun updateEditing(bump: Boolean = true, f: (Preset) -> Preset) {
+        val e = editing ?: return
+        commit(presets.map { if (it.id == e.id) f(it) else it }, bump)
+    }
+
+    /** 같은 입력은 한 기능에만 지정: 편집 중인 프리셋 안에서 다른 기능에 있던 같은 입력은 옮겨진다 */
+    fun addRule(a: Act, r: Rule) {
+        updateEditing { p ->
+            val m = LinkedHashMap<Act, List<Rule>>()
+            for (x in Act.values()) m[x] = p.rules(x).filter { it != r }
+            m[a] = (m[a] ?: emptyList()) + r
+            p.copy(map = m)
+        }
+    }
+
+    fun removeRule(a: Act, r: Rule) {
+        updateEditing { p -> p.copy(map = p.map + (a to p.rules(a).filter { it != r })) }
+    }
+
+    fun removeRuleEverywhere(r: Rule) {
+        updateEditing { p ->
+            val m = LinkedHashMap<Act, List<Rule>>()
+            for (x in Act.values()) m[x] = p.rules(x).filter { it != r }
+            p.copy(map = m)
+        }
+    }
+
+    @Synchronized
+    fun newPreset(name: String): String {
+        val id = "p" + System.currentTimeMillis()
+        editId = id
+        commit(presets + Preset(id = id, name = name, fallback = presets.isEmpty()))
+        return id
+    }
+
+    @Synchronized
+    fun deletePreset(id: String) {
+        commit(presets.filter { it.id != id })
+    }
+
+    @Synchronized
+    fun renamePreset(id: String, name: String) {
+        commit(presets.map { if (it.id == id) it.copy(name = name) else it })
+    }
+
+    @Synchronized
+    fun selectEdit(id: String) {
+        editId = id
+        mapVersion++
+        save()
+    }
+
+    /** 앱 연결: 같은 앱은 한 프리셋에만 연결되므로 다른 프리셋에 있던 것은 옮겨진다 */
+    @Synchronized
+    fun setApps(id: String, apps: List<String>) {
+        val set = apps.toSet()
+        commit(presets.map {
+            if (it.id == id) it.copy(apps = apps) else it.copy(apps = it.apps.filter { a -> a !in set })
+        })
+    }
+
+    /** 연결 안 된 모든 앱에 적용: 하나의 프리셋만 가질 수 있다 */
+    @Synchronized
+    fun setFallback(id: String, on: Boolean) {
+        commit(presets.map {
+            if (it.id == id) it.copy(fallback = on) else if (on) it.copy(fallback = false) else it
+        })
+    }
+
+    // ───────── 저장/불러오기 ─────────
+
+    fun encodeMap(m: Map<Act, List<Rule>>): String =
         Act.values().joinToString(";") { "${it.name}=${Rule.encodeList(m[it] ?: emptyList())}" }
 
-    private fun decodeMap(s: String): Map<Act, List<Rule>> {
+    fun decodeMap(s: String): Map<Act, List<Rule>> {
         val m = LinkedHashMap<Act, List<Rule>>()
         for (a in Act.values()) m[a] = emptyList()
         for (part in s.split(";")) {
@@ -57,75 +195,40 @@ object Cfg {
         return m
     }
 
-    /** 같은 입력은 한 기능에만 지정: 다른 기능에 있던 같은 입력은 옮겨진다 */
-    @Synchronized
-    fun addRule(a: Act, r: Rule) {
-        val m = LinkedHashMap<Act, List<Rule>>(map)
-        for (x in Act.values()) m[x] = (m[x] ?: emptyList()).filter { it != r }
-        m[a] = (m[a] ?: emptyList()) + r
-        map = m
-        mapVersion++
-        save()
+    private fun toJson(p: Preset): JSONObject = JSONObject().apply {
+        put("id", p.id)
+        put("name", p.name)
+        put("map", encodeMap(p.map))
+        put("apps", JSONArray(p.apps))
+        put("fallback", p.fallback)
+        put("unit", p.unit)
+        put("cd", p.cooldown)
+        put("steps", p.steps)
     }
 
-    @Synchronized
-    fun removeRule(a: Act, r: Rule) {
-        val m = LinkedHashMap<Act, List<Rule>>(map)
-        m[a] = (m[a] ?: emptyList()).filter { it != r }
-        map = m
-        mapVersion++
-        save()
-    }
-
-    @Synchronized
-    fun resetRules() {
-        map = defaultMap()
-        mapVersion++
-        save()
+    private fun fromJson(o: JSONObject): Preset {
+        val apps = ArrayList<String>()
+        val arr = o.optJSONArray("apps")
+        if (arr != null) for (i in 0 until arr.length()) apps.add(arr.getString(i))
+        return Preset(
+            id = o.getString("id"),
+            name = o.optString("name", "프리셋"),
+            map = decodeMap(o.optString("map", "")),
+            apps = apps,
+            fallback = o.optBoolean("fallback", false),
+            unit = o.optInt("unit", 100),
+            cooldown = o.optInt("cd", 120),
+            steps = o.optInt("steps", 1)
+        )
     }
 
     fun init(ctx: Context) {
         val p = ctx.getSharedPreferences("cfg", Context.MODE_PRIVATE)
         sp = p
         deviceFilter = p.getString("deviceFilter", "JX") ?: "JX"
-        val saved = p.getString("map", null)
-        map = if (saved == null) defaultMap() else decodeMap(saved)
-        if (!p.getBoolean("mig_gesture", false)) {
-            // v0.2.2 이전에 잘못 학습된 BTN_TOUCH(터치) 규칙 제거 + 스와이프 기본 규칙 추가
-            val m = LinkedHashMap<Act, List<Rule>>(map)
-            var removed = 0
-            for (a in Act.values()) {
-                val keep = (m[a] ?: emptyList()).filter { !(it.type == EventNames.EV_KEY && (it.code == 330 || it.code == 325)) }
-                removed += (m[a] ?: emptyList()).size - keep.size
-                m[a] = keep
-            }
-            if (m.values.none { l -> l.any { it.type == EventNames.EV_GESTURE } }) {
-                m[Act.VOL_UP] = (m[Act.VOL_UP] ?: emptyList()) + Rule(EventNames.EV_GESTURE, 1, 0)
-                m[Act.VOL_DOWN] = (m[Act.VOL_DOWN] ?: emptyList()) + Rule(EventNames.EV_GESTURE, 2, 0)
-            }
-            map = m
-            p.edit().putBoolean("mig_gesture", true).putString("map", encodeMap(m)).apply()
-            Diag.i("CONF", "v0.2.2 마이그레이션: BTN_TOUCH 규칙 ${removed}개 제거, 스와이프 기본 규칙 추가")
-        }
-        threshold = p.getFloat("threshold", 1.0f)
-        if (!p.getBoolean("mig_thr", false)) {
-            // v0.5.6: 스와이프 1번 = 1칸이라 높은 값이면 사실상 동작 안 함 → 1칸으로 초기화
-            Diag.i("CONF", "v0.5.6 마이그레이션: 민감도 ${threshold}칸 → 1.0칸")
-            threshold = 1.0f
-            p.edit().putBoolean("mig_thr", true).putFloat("threshold", 1.0f).apply()
-        }
+        threshold = 1.0f
         swipeMinPermille = p.getInt("swipeMinPermille", 15)
-        swipeUnitPermille = p.getInt("swipeUnitPermille", 100)
-        cooldownMs = p.getInt("cooldownMs", 120)
-        idleResetMs = p.getInt("idleResetMs", 400)
-        if (!p.getBoolean("mig_v06", false)) {
-            // v0.6.0: 스와이프를 이동량 단위로 처리 → 누적 기준은 1.0 고정, 천천히 돌려도 끊기지 않게 idle 늘림
-            threshold = 1.0f
-            idleResetMs = 800
-            p.edit().putBoolean("mig_v06", true).putFloat("threshold", 1.0f).putInt("idleResetMs", 800).apply()
-            Diag.i("CONF", "v0.6.0 마이그레이션: 누적 기준 1.0, idle 800ms")
-        }
-        stepsPerFire = p.getInt("stepsPerFire", 1)
+        idleResetMs = if (p.getBoolean("mig_v06", false)) p.getInt("idleResetMs", 800) else 800
         mediaFixed = p.getBoolean("mediaFixed", false)
         volumeKey = p.getBoolean("volumeKey", true)
         backend = p.getInt("backend", 0)
@@ -136,18 +239,49 @@ object Cfg {
         showUi = p.getBoolean("showUi", true)
         wakeLock = p.getBoolean("wakeLock", true)
         enabled = p.getBoolean("enabled", false)
+
+        val saved = p.getString("presets", null)
+        val list = ArrayList<Preset>()
+        if (saved != null) {
+            try {
+                val arr = JSONArray(saved)
+                for (i in 0 until arr.length()) list.add(fromJson(arr.getJSONObject(i)))
+            } catch (t: Throwable) {
+                Diag.e("CONF", "프리셋 불러오기 실패", t)
+            }
+        } else {
+            // 이전 버전(프리셋 없음) 설정 → 프리셋 1 로 옮김. 동작이 그대로 이어지도록 '연결 안 된 앱'에도 적용
+            // (이전의 기본 매핑은 버리고 비어 있는 상태로 시작: 기본 프리셋 없음)
+            list.add(
+                Preset(
+                    id = "p1",
+                    name = "프리셋 1",
+                    map = emptyMap(),
+                    fallback = true,
+                    unit = p.getInt("swipeUnitPermille", 100),
+                    cooldown = p.getInt("cooldownMs", 120),
+                    steps = p.getInt("stepsPerFire", 1)
+                )
+            )
+            Diag.i("CONF", "프리셋 첫 생성: 비어 있는 '프리셋 1' (감도는 기존 값 유지)")
+        }
+        presets = list
+        editId = p.getString("editId", "") ?: ""
+        if (presets.none { it.id == editId }) editId = presets.firstOrNull()?.id ?: ""
+        p.edit().putBoolean("mig_v06", true).apply()
+        save()
+        setRuntimePackage(null)
     }
 
     fun save() {
+        val arr = JSONArray()
+        for (x in presets) arr.put(toJson(x))
         sp?.edit()
             ?.putString("deviceFilter", deviceFilter)
-            ?.putString("map", encodeMap(map))
-            ?.putFloat("threshold", threshold)
+            ?.putString("presets", arr.toString())
+            ?.putString("editId", editId)
             ?.putInt("swipeMinPermille", swipeMinPermille)
-            ?.putInt("swipeUnitPermille", swipeUnitPermille)
-            ?.putInt("cooldownMs", cooldownMs)
             ?.putInt("idleResetMs", idleResetMs)
-            ?.putInt("stepsPerFire", stepsPerFire)
             ?.putBoolean("mediaFixed", mediaFixed)
             ?.putBoolean("volumeKey", volumeKey)
             ?.putInt("backend", backend)
@@ -162,6 +296,7 @@ object Cfg {
     }
 
     fun describe(): String =
-        "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold swipeUnit=$swipeUnitPermille cd=${cooldownMs}ms idle=${idleResetMs}ms " +
-            "steps=$stepsPerFire media=$mediaFixed backend=$backend adbPort=$adbPort vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
+        "필터='$deviceFilter' 프리셋=${presets.joinToString { "${it.name}(앱${it.apps.size}${if (it.fallback) ",나머지" else ""},unit=${it.unit},cd=${it.cooldown},steps=${it.steps})" }} " +
+            "편집=$editId 적용=$runtimeId idle=${idleResetMs}ms media=$mediaFixed backend=$backend adbPort=$adbPort " +
+            "vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
 }

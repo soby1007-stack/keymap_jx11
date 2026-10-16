@@ -166,4 +166,6 @@ class SocketInput(
     }
 
     override fun setImeWithHardKeyboard(show: Boolean) = send("IME\t${if (show) 1 else 0}")
+
+    override fun grantUsageAccess(pkg: String) = send("USAGE\t${AdbServer.esc(pkg)}")
 }

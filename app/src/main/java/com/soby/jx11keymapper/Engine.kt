@@ -6,7 +6,7 @@ import android.os.SystemClock
 import android.view.KeyEvent
 
 /** 동작 종류. VOLUME/MUTE/MEDIA 는 앱 권한만으로, KEY/NOTIF 는 Shizuku(셸 권한)가 필요하다. */
-enum class Kind { VOLUME, MUTE, MEDIA, KEY, NOTIF }
+enum class Kind { VOLUME, MUTE, MEDIA, KEY, NOTIF, REFRESH }
 
 /** 매핑 가능한 기능 목록 (표의 행). repeatOk: 키를 길게 눌러 반복되는 입력(REPEAT)도 허용 */
 enum class Act(val label: String, val kind: Kind, val code: Int = 0, val repeatOk: Boolean = false) {
@@ -27,7 +27,8 @@ enum class Act(val label: String, val kind: Kind, val code: Int = 0, val repeatO
     PAGE_DOWN("페이지 아래 (PageDown)", Kind.KEY, KeyEvent.KEYCODE_PAGE_DOWN, true),
     OK("확인", Kind.KEY, KeyEvent.KEYCODE_DPAD_CENTER),
     NOTIF("알림창 열기", Kind.NOTIF),
-    POWER("전원 (화면 켜기/끄기)", Kind.KEY, KeyEvent.KEYCODE_POWER);
+    POWER("전원 (화면 켜기/끄기)", Kind.KEY, KeyEvent.KEYCODE_POWER),
+    REFRESH("E-ink 화면 새로고침", Kind.REFRESH);
 
     val needsShell: Boolean
         get() = kind == Kind.KEY || kind == Kind.NOTIF
@@ -197,6 +198,7 @@ object ActionRunner {
                         repeat(n) { shell.sendKey(act.code) }
                     }
                 }
+                Kind.REFRESH -> EinkRefresh.flash(ctx)
                 Kind.NOTIF -> {
                     if (shell == null) {
                         Diag.w("ACTION", "'${act.label}'은(는) Shizuku 연결이 필요합니다 (현재 미연결)")

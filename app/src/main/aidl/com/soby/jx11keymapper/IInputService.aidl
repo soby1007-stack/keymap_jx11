@@ -19,4 +19,6 @@ interface IInputService {
     void setGrab(boolean on) = 7;
     // 물리 키보드(JX-11 등)가 연결돼 있어도 화면 키보드를 띄울지 (settings secure show_ime_with_hard_keyboard)
     void setImeWithHardKeyboard(boolean show) = 8;
+    // 앞 앱 감지(사용 기록 접근)를 셸 권한으로 허용: appops set <pkg> GET_USAGE_STATS allow
+    void grantUsageAccess(String pkg) = 9;
 }
