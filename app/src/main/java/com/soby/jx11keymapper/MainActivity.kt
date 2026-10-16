@@ -126,15 +126,15 @@ class MainActivity : Activity() {
 
         // ── 민감도 ──
         root.addView(title("민감도"))
-        root.addView(slider("휠 몇 칸(스와이프 몇 번)에 1회 동작", 11,
-            { ((Cfg.threshold / 0.25f).roundToInt() - 1).coerceIn(0, 11) },
-            { Cfg.threshold = (it + 1) * 0.25f },
-            { "%.2f칸 (1.00 = 한 번 밀 때마다 동작, 작을수록 민감)".format((it + 1) * 0.25f) }))
+        root.addView(slider("이동 감도: 이만큼 움직일 때마다 1회 동작", 29,
+            { ((Cfg.swipeUnitPermille / 10) - 1).coerceIn(0, 29) },
+            { Cfg.swipeUnitPermille = (it + 1) * 10 },
+            { "${(it + 1) * 10}‰ (작을수록 민감 · 휠 한 칸 ≈ 150~180‰)" }))
         root.addView(slider("연속 동작 간격", 50,
             { (Cfg.cooldownMs / 10).coerceIn(0, 50) },
             { Cfg.cooldownMs = it * 10 },
             { "${it * 10}ms (작을수록 빠름)" }))
-        root.addView(slider("휠 한 칸 돌릴 때 반복 횟수 (볼륨·방향키·페이지)", 49,
+        root.addView(slider("동작 1회당 반복 횟수 (볼륨·방향키·페이지)", 49,
             { (Cfg.stepsPerFire - 1).coerceIn(0, 49) },
             { Cfg.stepsPerFire = it + 1 },
             { "${it + 1}번" }))

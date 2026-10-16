@@ -326,19 +326,22 @@ class KeymapService : Service() {
     }
 
     fun restartInput() {
-        val svc = input
-        if (svc == null) {
-            Diag.w("SVC", "restartInput: UserService 미연결")
-            return
-        }
-        try {
-            svc.stop()
-            try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
+        // 무선 ADB 방식은 소켓 전송이라 메인 스레드에서 부르면 NetworkOnMainThreadException → 백그라운드로
+        io.execute {
+            val svc = input
+            if (svc == null) {
+                Diag.w("SVC", "restartInput: 서비스 미연결")
+                return@execute
+            }
+            try {
+                svc.stop()
+                try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
-            Diag.i("SVC", "장치 필터 적용: '${Cfg.deviceFilter}'")
-            setStatus("동작 중 · $via (장치 필터 '${Cfg.deviceFilter}')")
-        } catch (t: Throwable) {
-            Diag.e("SVC", "restartInput 실패", t)
+                Diag.i("SVC", "장치 필터/독점 적용: '${Cfg.deviceFilter}' grab=${Cfg.grab}")
+                main.post { setStatus("동작 중 · $via (장치 필터 '${Cfg.deviceFilter}')") }
+            } catch (t: Throwable) {
+                Diag.e("SVC", "restartInput 실패", t)
+            }
         }
     }
 

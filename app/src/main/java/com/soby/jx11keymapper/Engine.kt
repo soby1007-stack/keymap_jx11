@@ -50,8 +50,8 @@ data class Rule(val type: Int, val code: Int, val sign: Int) {
         if (type == EventNames.EV_KEY) {
             return if (v == 1 || v == 2) 1f else 0f   // 눌림 / 길게 눌러 반복
         }
-        // 제스처: 스와이프 1번 = 1칸. value = 이동량(‰) — 너무 짧은 움직임은 설정값 미만이면 무시 (탭(5)은 항상)
-        if (type == EventNames.EV_GESTURE) return if (c == 5 || v >= Cfg.swipeMinPermille) 1f else 0f
+        // 제스처: 스와이프는 프레임마다 조금씩(value = 그 프레임의 이동량 ‰) 들어온다 → "설정한 ‰ 움직일 때마다 1회". 탭(5)은 1
+        if (type == EventNames.EV_GESTURE) return if (c == 5) 1f else if (v > 0) v.toFloat() / maxOf(Cfg.swipeUnitPermille, 5) else 0f
         return 0f
     }
 

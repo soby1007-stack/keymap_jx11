@@ -15,6 +15,7 @@ object Cfg {
     @Volatile var mapVersion: Int = 0                        // 표가 바뀌면 증가 → 화면 다시 그림
     @Volatile var threshold: Float = 1.0f       // 동작 1회에 필요한 스크롤량(클수록 둔감)
     @Volatile var swipeMinPermille: Int = 15    // 스와이프로 인정하는 최소 이동량 (화면 범위 대비 ‰)
+    @Volatile var swipeUnitPermille: Int = 100  // 스와이프가 이만큼(‰) 움직일 때마다 동작 1회 (휠 한 칸 ≈ 150~180‰)
     @Volatile var cooldownMs: Int = 120         // 동작 간 최소 간격
     @Volatile var idleResetMs: Int = 400        // 이 시간 멈추면 누적 초기화
     @Volatile var stepsPerFire: Int = 1         // 볼륨/방향키 1회 동작당 반복 수
@@ -114,8 +115,16 @@ object Cfg {
             p.edit().putBoolean("mig_thr", true).putFloat("threshold", 1.0f).apply()
         }
         swipeMinPermille = p.getInt("swipeMinPermille", 15)
+        swipeUnitPermille = p.getInt("swipeUnitPermille", 100)
         cooldownMs = p.getInt("cooldownMs", 120)
         idleResetMs = p.getInt("idleResetMs", 400)
+        if (!p.getBoolean("mig_v06", false)) {
+            // v0.6.0: 스와이프를 이동량 단위로 처리 → 누적 기준은 1.0 고정, 천천히 돌려도 끊기지 않게 idle 늘림
+            threshold = 1.0f
+            idleResetMs = 800
+            p.edit().putBoolean("mig_v06", true).putFloat("threshold", 1.0f).putInt("idleResetMs", 800).apply()
+            Diag.i("CONF", "v0.6.0 마이그레이션: 누적 기준 1.0, idle 800ms")
+        }
         stepsPerFire = p.getInt("stepsPerFire", 1)
         mediaFixed = p.getBoolean("mediaFixed", false)
         volumeKey = p.getBoolean("volumeKey", true)
@@ -135,6 +144,7 @@ object Cfg {
             ?.putString("map", encodeMap(map))
             ?.putFloat("threshold", threshold)
             ?.putInt("swipeMinPermille", swipeMinPermille)
+            ?.putInt("swipeUnitPermille", swipeUnitPermille)
             ?.putInt("cooldownMs", cooldownMs)
             ?.putInt("idleResetMs", idleResetMs)
             ?.putInt("stepsPerFire", stepsPerFire)
@@ -152,6 +162,6 @@ object Cfg {
     }
 
     fun describe(): String =
-        "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold swipeMin=$swipeMinPermille cd=${cooldownMs}ms idle=${idleResetMs}ms " +
+        "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold swipeUnit=$swipeUnitPermille cd=${cooldownMs}ms idle=${idleResetMs}ms " +
             "steps=$stepsPerFire media=$mediaFixed backend=$backend adbPort=$adbPort vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
 }

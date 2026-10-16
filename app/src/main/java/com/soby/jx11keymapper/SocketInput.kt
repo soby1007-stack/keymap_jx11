@@ -109,7 +109,18 @@ class SocketInput(
         }
     }
 
+    private val sender = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     private fun send(line: String) {
+        // 메인 스레드에서 소켓에 쓰면 예외가 나므로 전용 스레드로 넘긴다
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            try { sender.execute { sendNow(line) } } catch (e: Throwable) { Diag.w("ADB", "전송 큐 거부: $line") }
+        } else {
+            sendNow(line)
+        }
+    }
+
+    private fun sendNow(line: String) {
         val w = writer ?: return
         synchronized(w) {
             w.print(line)

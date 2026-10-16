@@ -31,47 +31,88 @@ class InputService : IInputService.Stub() {
 
     /**
      * JX-11 은 휠이 아니라 터치패드(디지타이저) 방식이라 REL_WHEEL 이 아닌
-     * BTN_TOUCH + ABS 좌표로 입력이 온다. 좌표 이동을 스와이프(코드 1~4)·탭(5)으로 바꿔 앱에 전달한다.
-     * 손가락을 대고 움직이는 동안 일정 거리(범위의 5%)마다 1칸씩 발생 → 스크롤 느낌.
+     * BTN_TOUCH + ABS 좌표로 입력이 온다. 손가락(휠)이 움직이는 동안 프레임(SYN)마다 좌표 변화량을
+     * 스와이프 조각(코드 1~4, value = 이동량 ‰)으로 바로 앱에 보낸다 → 앱이 "N‰ 움직일 때마다 1회"로 환산.
+     * 손가락이 떨어질 때 나오는 튀는 좌표(0 이나 범위 밖, 한 프레임에 25% 넘게 점프)는 버린다.
+     * 거의 안 움직이고 짧게 떼면 탭(5).
      */
     private inner class Gesture(val d: Dev) {
         var down = false
-        var x = Int.MIN_VALUE
-        var y = Int.MIN_VALUE
-        var sx = 0
-        var sy = 0
-        var anchored = false
+        var x = 0
+        var y = 0
+        var gotX = false
+        var gotY = false
+        var axOk = false
+        var ayOk = false
+        var lx = 0
+        var ly = 0
+        var bad = 0
         var t0 = 0L
+        var travel = 0f
         var raw = 0
 
         private fun begin() {
             if (down) return
             down = true
-            anchored = false
+            gotX = false
+            gotY = false
+            axOk = false
+            ayOk = false
+            bad = 0
+            travel = 0f
             t0 = SystemClock.elapsedRealtime()
             report("D", "GESTURE", "${d.name} 터치 시작 (range ${d.rangeX}x${d.rangeY})")
         }
 
-        /** 손가락(휠 한 칸)이 떨어지는 순간 스와이프 1번(또는 탭)으로 확정. value = 이동량(범위 대비 ‰) */
+        /** 프레임 하나: 직전에 인정한 좌표와 비교해 이동량을 내보낸다 */
+        private fun frame(emit: (Int, Int) -> Unit) {
+            if (!down) return
+            val rx = (if (d.rangeX > 0) d.rangeX else 4096).toFloat()
+            val ry = (if (d.rangeY > 0) d.rangeY else 4096).toFloat()
+            var dx = 0
+            var dy = 0
+            if (gotX) {
+                if (axOk) dx = x - lx else { lx = x; axOk = true }
+            }
+            if (gotY) {
+                if (ayOk) dy = y - ly else { ly = y; ayOk = true }
+            }
+            if (dx == 0 && dy == 0) return
+            val fx = dx / rx
+            val fy = dy / ry
+            if (Math.abs(fx) > 0.25f || Math.abs(fy) > 0.25f) {
+                bad++
+                report("D", "GESTURE", "${d.name} 튀는 좌표 무시 dx=$dx dy=$dy (연속 $bad)")
+                if (bad >= 3) {   // 계속 튄다 = 진짜 큰 이동 → 현재 좌표로 기준을 다시 잡는다
+                    lx = x
+                    ly = y
+                    bad = 0
+                }
+                return
+            }
+            bad = 0
+            if (gotX) lx = x
+            if (gotY) ly = y
+            val ax = Math.abs(fx)
+            val ay = Math.abs(fy)
+            travel += (ax + ay) * 1000f
+            if (ay >= ax) {
+                emit(if (fy < 0) 1 else 2, Math.max(1, Math.round(ay * 1000f)))
+            } else {
+                emit(if (fx < 0) 3 else 4, Math.max(1, Math.round(ax * 1000f)))
+            }
+        }
+
+        /** 손가락이 떨어짐: 거의 안 움직였고 짧으면 탭 */
         private fun end(emit: (Int, Int) -> Unit) {
             if (!down) return
             down = false
             val dt = SystemClock.elapsedRealtime() - t0
-            val rx = (if (d.rangeX > 0) d.rangeX else 4096).toFloat()
-            val ry = (if (d.rangeY > 0) d.rangeY else 4096).toFloat()
-            val fx = if (anchored && x != Int.MIN_VALUE) (x - sx) / rx else 0f
-            val fy = if (anchored && y != Int.MIN_VALUE) (y - sy) / ry else 0f
-            val ax = Math.abs(fx)
-            val ay = Math.abs(fy)
-            val frac = Math.max(ax, ay)
-            if (frac < 0.005f) {
-                report("D", "GESTURE", "${d.name} 탭 (${dt}ms, 이동 ${(frac * 1000).toInt()}‰)")
+            if (travel < 5f) {
+                report("D", "GESTURE", "${d.name} 탭 (${dt}ms, 이동 ${travel.toInt()}‰)")
                 if (dt < 600) emit(5, 1)
             } else {
-                val code = if (ay >= ax) (if (fy < 0) 1 else 2) else (if (fx < 0) 3 else 4)
-                val permille = Math.min(1000, (frac * 1000).toInt())
-                report("D", "GESTURE", "${d.name} 스와이프 코드=$code 이동=${permille}‰ dx=${"%.3f".format(fx)} dy=${"%.3f".format(fy)} (${dt}ms)")
-                emit(code, permille)
+                report("D", "GESTURE", "${d.name} 터치 끝 (${dt}ms, 인정한 이동 합계 ${travel.toInt()}‰)")
             }
         }
 
@@ -85,15 +126,11 @@ class InputService : IInputService.Stub() {
                     if (value == 1) begin() else if (value == 0) end(emit)
                 }
                 3 -> when (code) {
-                    0, 53 -> x = value
-                    1, 54 -> y = value
+                    0, 53 -> { x = value; gotX = true }
+                    1, 54 -> { y = value; gotY = true }
                     57 -> if (value >= 0) begin() else end(emit)
                 }
-                0 -> if (code == 0 && down && !anchored && x != Int.MIN_VALUE && y != Int.MIN_VALUE) {
-                    sx = x
-                    sy = y
-                    anchored = true
-                }
+                0 -> if (code == 0) frame(emit)
             }
         }
     }
