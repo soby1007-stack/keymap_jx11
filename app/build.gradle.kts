@@ -6,14 +6,16 @@ plugins {
 android {
     namespace = "com.soby.jx11keymapper"
     compileSdk = 35
+    // 워크플로(build.yml)가 설치하는 NDK 와 같은 버전으로 고정 (AGP 기본값 27 을 자동 다운로드하다 실패했음)
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.soby.jx11keymapper"
         minSdk = 26
         targetSdk = 34
         ndk { abiFilters += "arm64-v8a" }
-        versionCode = 11
-        versionName = "0.5.1"
+        versionCode = 14
+        versionName = "0.5.4"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)

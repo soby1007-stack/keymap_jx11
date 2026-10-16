@@ -117,7 +117,7 @@ class MainActivity : Activity() {
         root.addView(tvLearn)
         tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(tableBox)
-        root.addView(label("＋ 를 누르고 JX-11 입력 → 등록 (한 기능에 여러 개 가능) · － 는 삭제\n" +
+        root.addView(label("＋ 를 누르고 JX-11 입력 → 등록 (한 기능에 여러 개 가능) · － 는 목록에서 체크 해제 후 [적용]으로 삭제\n" +
             "⚡ 는 shell 권한(Shizuku 또는 무선 ADB)이 필요한 동작 · 같은 입력은 한 기능에만 지정돼요").apply { textSize = 12f })
         root.addView(button("표 기본값으로") {
             Cfg.resetRules()
@@ -126,10 +126,14 @@ class MainActivity : Activity() {
 
         // ── 민감도 ──
         root.addView(title("민감도"))
-        root.addView(slider("스크롤 몇 칸에 1회 동작", 39,
+        root.addView(slider("휠 몇 칸(스와이프 몇 번)에 1회 동작", 39,
             { ((Cfg.threshold / 0.25f).roundToInt() - 1).coerceIn(0, 39) },
             { Cfg.threshold = (it + 1) * 0.25f },
             { "%.2f칸 (작을수록 민감)".format((it + 1) * 0.25f) }))
+        root.addView(slider("스와이프 최소 이동량 (JX-11 휠 한 칸 인식)", 19,
+            { ((Cfg.swipeMinPermille / 5) - 1).coerceIn(0, 19) },
+            { Cfg.swipeMinPermille = (it + 1) * 5 },
+            { "%.1f%% (작을수록 민감, 너무 작으면 떨림도 인식)".format((it + 1) * 0.5f) }))
         root.addView(slider("연속 동작 간격", 50,
             { (Cfg.cooldownMs / 10).coerceIn(0, 50) },
             { Cfg.cooldownMs = it * 10 },
@@ -269,12 +273,27 @@ class MainActivity : Activity() {
         return b
     }
 
+    /** － : 이 기능에 지정된 입력 목록을 체크박스로 보여주고, 체크를 해제한 것을 삭제한다 (키 입력 필요 없음) */
     private fun onMinus(act: Act, rules: List<Rule>) {
-        if (rules.size == 1) {
-            confirmDelete(act, rules[0])
-        } else {
-            startLearn(act, true)
-        }
+        if (rules.isEmpty()) return
+        val labels = rules.map { it.label() }.toTypedArray()
+        val checked = BooleanArray(rules.size) { true }
+        AlertDialog.Builder(this)
+            .setTitle("'${act.label}' 지정 목록")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton("적용") { _, _ ->
+                var n = 0
+                for (i in rules.indices) {
+                    if (!checked[i]) {
+                        Cfg.removeRule(act, rules[i])
+                        Diag.i("UI", "삭제: ${act.label} ← ${rules[i].label()}")
+                        n++
+                    }
+                }
+                toast(if (n > 0) "${n}개 삭제됨" else "변경 없음")
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     private fun confirmDelete(act: Act, rule: Rule) {

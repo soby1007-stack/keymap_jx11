@@ -14,6 +14,7 @@ object Cfg {
     @Volatile var map: Map<Act, List<Rule>> = defaultMap()   // 기능별 입력 규칙 (표의 내용)
     @Volatile var mapVersion: Int = 0                        // 표가 바뀌면 증가 → 화면 다시 그림
     @Volatile var threshold: Float = 1.0f       // 동작 1회에 필요한 스크롤량(클수록 둔감)
+    @Volatile var swipeMinPermille: Int = 15    // 스와이프로 인정하는 최소 이동량 (화면 범위 대비 ‰)
     @Volatile var cooldownMs: Int = 120         // 동작 간 최소 간격
     @Volatile var idleResetMs: Int = 400        // 이 시간 멈추면 누적 초기화
     @Volatile var stepsPerFire: Int = 1         // 볼륨/방향키 1회 동작당 반복 수
@@ -105,6 +106,7 @@ object Cfg {
             Diag.i("CONF", "v0.2.2 마이그레이션: BTN_TOUCH 규칙 ${removed}개 제거, 스와이프 기본 규칙 추가")
         }
         threshold = p.getFloat("threshold", 1.0f)
+        swipeMinPermille = p.getInt("swipeMinPermille", 15)
         cooldownMs = p.getInt("cooldownMs", 120)
         idleResetMs = p.getInt("idleResetMs", 400)
         stepsPerFire = p.getInt("stepsPerFire", 1)
@@ -124,6 +126,7 @@ object Cfg {
             ?.putString("deviceFilter", deviceFilter)
             ?.putString("map", encodeMap(map))
             ?.putFloat("threshold", threshold)
+            ?.putInt("swipeMinPermille", swipeMinPermille)
             ?.putInt("cooldownMs", cooldownMs)
             ?.putInt("idleResetMs", idleResetMs)
             ?.putInt("stepsPerFire", stepsPerFire)
@@ -140,6 +143,6 @@ object Cfg {
     }
 
     fun describe(): String =
-        "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold cd=${cooldownMs}ms idle=${idleResetMs}ms " +
+        "필터='$deviceFilter' map=${encodeMap(map)} thr=$threshold swipeMin=$swipeMinPermille cd=${cooldownMs}ms idle=${idleResetMs}ms " +
             "steps=$stepsPerFire media=$mediaFixed backend=$backend adbPort=$adbPort vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
 }

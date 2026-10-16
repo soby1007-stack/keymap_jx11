@@ -50,7 +50,8 @@ data class Rule(val type: Int, val code: Int, val sign: Int) {
         if (type == EventNames.EV_KEY) {
             return if (v == 1 || v == 2) 1f else 0f   // 눌림 / 길게 눌러 반복
         }
-        if (type == EventNames.EV_GESTURE) return 1f
+        // 제스처: 스와이프 1번 = 1칸. value = 이동량(‰) — 너무 짧은 움직임은 설정값 미만이면 무시 (탭(5)은 항상)
+        if (type == EventNames.EV_GESTURE) return if (c == 5 || v >= Cfg.swipeMinPermille) 1f else 0f
         return 0f
     }
 
@@ -256,7 +257,7 @@ object Learner {
         val qualifies = (type == EventNames.EV_REL && value != 0 &&
             code != 0 && code != 1 && code != 11 && code != 12) ||
             (type == EventNames.EV_KEY && value == 1 && code != 330 && code != 325) ||   // BTN_TOUCH 등은 제외
-            (type == EventNames.EV_GESTURE)
+            (type == EventNames.EV_GESTURE && (code == 5 || value >= Cfg.swipeMinPermille))
         if (!qualifies) return true
 
         val sign = if (type == EventNames.EV_REL) (if (value > 0) 1 else -1) else 0

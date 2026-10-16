@@ -38,10 +38,9 @@ class InputService : IInputService.Stub() {
         var down = false
         var x = Int.MIN_VALUE
         var y = Int.MIN_VALUE
-        var ax = 0
-        var ay = 0
+        var sx = 0
+        var sy = 0
         var anchored = false
-        var moved = false
         var t0 = 0L
         var raw = 0
 
@@ -49,24 +48,34 @@ class InputService : IInputService.Stub() {
             if (down) return
             down = true
             anchored = false
-            moved = false
             t0 = SystemClock.elapsedRealtime()
             report("D", "GESTURE", "${d.name} 터치 시작 (range ${d.rangeX}x${d.rangeY})")
         }
 
-        private fun end(emit: (Int) -> Unit) {
+        /** 손가락(휠 한 칸)이 떨어지는 순간 스와이프 1번(또는 탭)으로 확정. value = 이동량(범위 대비 ‰) */
+        private fun end(emit: (Int, Int) -> Unit) {
             if (!down) return
             down = false
             val dt = SystemClock.elapsedRealtime() - t0
-            if (!moved && dt < 600) {
-                report("D", "GESTURE", "${d.name} 탭 (${dt}ms)")
-                emit(5)
+            val rx = (if (d.rangeX > 0) d.rangeX else 4096).toFloat()
+            val ry = (if (d.rangeY > 0) d.rangeY else 4096).toFloat()
+            val fx = if (anchored && x != Int.MIN_VALUE) (x - sx) / rx else 0f
+            val fy = if (anchored && y != Int.MIN_VALUE) (y - sy) / ry else 0f
+            val ax = Math.abs(fx)
+            val ay = Math.abs(fy)
+            val frac = Math.max(ax, ay)
+            if (frac < 0.005f) {
+                report("D", "GESTURE", "${d.name} 탭 (${dt}ms, 이동 ${(frac * 1000).toInt()}‰)")
+                if (dt < 600) emit(5, 1)
             } else {
-                report("D", "GESTURE", "${d.name} 터치 끝 (${dt}ms, 이동=$moved)")
+                val code = if (ay >= ax) (if (fy < 0) 1 else 2) else (if (fx < 0) 3 else 4)
+                val permille = Math.min(1000, (frac * 1000).toInt())
+                report("D", "GESTURE", "${d.name} 스와이프 코드=$code 이동=${permille}‰ dx=${"%.3f".format(fx)} dy=${"%.3f".format(fy)} (${dt}ms)")
+                emit(code, permille)
             }
         }
 
-        fun feed(type: Int, code: Int, value: Int, emit: (Int) -> Unit) {
+        fun feed(type: Int, code: Int, value: Int, emit: (Int, Int) -> Unit) {
             if (type != 0 && raw < 80) {
                 raw++
                 report("D", "RAW", "${d.name} type=$type code=$code value=$value")
@@ -80,34 +89,11 @@ class InputService : IInputService.Stub() {
                     1, 54 -> y = value
                     57 -> if (value >= 0) begin() else end(emit)
                 }
-                0 -> if (code == 0 && down) step(emit)
-            }
-        }
-
-        private fun step(emit: (Int) -> Unit) {
-            if (x == Int.MIN_VALUE || y == Int.MIN_VALUE) return
-            if (!anchored) {
-                ax = x
-                ay = y
-                anchored = true
-                return
-            }
-            val sx = maxOf(1, (if (d.rangeX > 0) d.rangeX else 4096) / 20)
-            val sy = maxOf(1, (if (d.rangeY > 0) d.rangeY else 4096) / 20)
-            val dx = x - ax
-            val dy = y - ay
-            if (Math.abs(dy) >= sy && Math.abs(dy) * sx >= Math.abs(dx) * sy) {
-                val n = Math.abs(dy) / sy
-                ay += (if (dy > 0) 1 else -1) * n * sy
-                ax = x
-                moved = true
-                repeat(n) { emit(if (dy < 0) 1 else 2) }
-            } else if (Math.abs(dx) >= sx) {
-                val n = Math.abs(dx) / sx
-                ax += (if (dx > 0) 1 else -1) * n * sx
-                ay = y
-                moved = true
-                repeat(n) { emit(if (dx < 0) 3 else 4) }
+                0 -> if (code == 0 && down && !anchored && x != Int.MIN_VALUE && y != Int.MIN_VALUE) {
+                    sx = x
+                    sy = y
+                    anchored = true
+                }
             }
         }
     }
@@ -115,9 +101,8 @@ class InputService : IInputService.Stub() {
     /** 읽은 이벤트 1개 처리: KEY/REL 은 그대로, 터치 좌표는 제스처로 변환해서 전달 */
     private fun dispatch(d: Dev, g: Gesture, type: Int, code: Int, value: Int) {
         if (type == 1 || type == 2) cb?.onEvent(type, code, value, d.name)
-        g.feed(type, code, value) { c ->
-            report("D", "GESTURE", "${d.name} 제스처 $c")
-            cb?.onEvent(100, c, 1, d.name)
+        g.feed(type, code, value) { c, v ->
+            cb?.onEvent(100, c, v, d.name)
         }
     }
 
