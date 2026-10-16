@@ -17,4 +17,6 @@ interface IInputService {
     void expandNotifications() = 6;
     // 장치 독점(원래 터치/스크롤 동작 막기). start() 전에 호출
     void setGrab(boolean on) = 7;
+    // 물리 키보드(JX-11 등)가 연결돼 있어도 화면 키보드를 띄울지 (settings secure show_ime_with_hard_keyboard)
+    void setImeWithHardKeyboard(boolean show) = 8;
 }

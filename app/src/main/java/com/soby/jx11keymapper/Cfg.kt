@@ -21,6 +21,7 @@ object Cfg {
     @Volatile var mediaFixed: Boolean = false   // true: 미디어 볼륨 고정, false: 볼륨키와 동일(활성 스트림)
     @Volatile var volumeKey: Boolean = true     // true: 볼륨을 키 입력으로 주입(이북 페이지 넘김 등), false: AudioManager 직접 조절
     @Volatile var grab: Boolean = true          // JX-11 독점: 원래 터치/스크롤 동작 막기 (EVIOCGRAB)
+    @Volatile var imeWithKeyboard: Boolean = true  // JX-11 연결 중에도 화면 키보드 표시 (물리 키보드로 인식돼 키보드가 숨겨지는 것 방지)
     @Volatile var showUi: Boolean = true
     @Volatile var wakeLock: Boolean = true
     @Volatile var enabled: Boolean = false      // 사용자가 켜 둔 상태
@@ -106,6 +107,12 @@ object Cfg {
             Diag.i("CONF", "v0.2.2 마이그레이션: BTN_TOUCH 규칙 ${removed}개 제거, 스와이프 기본 규칙 추가")
         }
         threshold = p.getFloat("threshold", 1.0f)
+        if (!p.getBoolean("mig_thr", false)) {
+            // v0.5.6: 스와이프 1번 = 1칸이라 높은 값이면 사실상 동작 안 함 → 1칸으로 초기화
+            Diag.i("CONF", "v0.5.6 마이그레이션: 민감도 ${threshold}칸 → 1.0칸")
+            threshold = 1.0f
+            p.edit().putBoolean("mig_thr", true).putFloat("threshold", 1.0f).apply()
+        }
         swipeMinPermille = p.getInt("swipeMinPermille", 15)
         cooldownMs = p.getInt("cooldownMs", 120)
         idleResetMs = p.getInt("idleResetMs", 400)
@@ -116,6 +123,7 @@ object Cfg {
         adbPort = p.getInt("adbPort", 0)
         adbToken = p.getString("adbToken", "") ?: ""
         grab = p.getBoolean("grab", true)
+        imeWithKeyboard = p.getBoolean("imeWithKeyboard", true)
         showUi = p.getBoolean("showUi", true)
         wakeLock = p.getBoolean("wakeLock", true)
         enabled = p.getBoolean("enabled", false)
@@ -136,6 +144,7 @@ object Cfg {
             ?.putInt("adbPort", adbPort)
             ?.putString("adbToken", adbToken)
             ?.putBoolean("grab", grab)
+            ?.putBoolean("imeWithKeyboard", imeWithKeyboard)
             ?.putBoolean("showUi", showUi)
             ?.putBoolean("wakeLock", wakeLock)
             ?.putBoolean("enabled", enabled)

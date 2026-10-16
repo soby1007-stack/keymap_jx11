@@ -153,4 +153,6 @@ class SocketInput(
     override fun setGrab(on: Boolean) {
         grab = on
     }
+
+    override fun setImeWithHardKeyboard(show: Boolean) = send("IME\t${if (show) 1 else 0}")
 }

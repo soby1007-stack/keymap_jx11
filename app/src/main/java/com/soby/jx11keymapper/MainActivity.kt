@@ -126,10 +126,10 @@ class MainActivity : Activity() {
 
         // ── 민감도 ──
         root.addView(title("민감도"))
-        root.addView(slider("휠 몇 칸(스와이프 몇 번)에 1회 동작", 39,
-            { ((Cfg.threshold / 0.25f).roundToInt() - 1).coerceIn(0, 39) },
+        root.addView(slider("휠 몇 칸(스와이프 몇 번)에 1회 동작", 11,
+            { ((Cfg.threshold / 0.25f).roundToInt() - 1).coerceIn(0, 11) },
             { Cfg.threshold = (it + 1) * 0.25f },
-            { "%.2f칸 (작을수록 민감)".format((it + 1) * 0.25f) }))
+            { "%.2f칸 (1.00 = 한 번 밀 때마다 동작, 작을수록 민감)".format((it + 1) * 0.25f) }))
         root.addView(slider("스와이프 최소 이동량 (JX-11 휠 한 칸 인식)", 19,
             { ((Cfg.swipeMinPermille / 5) - 1).coerceIn(0, 19) },
             { Cfg.swipeMinPermille = (it + 1) * 5 },
@@ -149,6 +149,11 @@ class MainActivity : Activity() {
             Cfg.grab = it
             Cfg.save()
             KeymapService.instance?.restartInput()
+        }))
+        root.addView(sw("JX-11 연결 중에도 화면 키보드 표시", { Cfg.imeWithKeyboard }, {
+            Cfg.imeWithKeyboard = it
+            Cfg.save()
+            KeymapService.instance?.applyIme()
         }))
         root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
         root.addView(sw("미디어 볼륨 고정 (끄면 실제 볼륨키와 동일)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it }))

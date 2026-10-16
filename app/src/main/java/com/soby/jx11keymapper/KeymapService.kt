@@ -112,6 +112,7 @@ class KeymapService : Service() {
                 input = svc
                 Diag.i("BIND", "UserService 연결됨: ${svc.ping()}")
                 try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
+                try { svc.setImeWithHardKeyboard(Cfg.imeWithKeyboard) } catch (t: Throwable) { Diag.w("SVC", "화면 키보드 설정 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
                 via = "Shizuku"
                 setStatus("동작 중 · Shizuku (장치 필터 '${Cfg.deviceFilter}')")
@@ -272,6 +273,7 @@ class KeymapService : Service() {
                 when (val r = c.connect()) {
                     SocketInput.Result.OK -> {
                         c.setGrab(Cfg.grab)
+                        c.setImeWithHardKeyboard(Cfg.imeWithKeyboard)
                         adbClient = c
                         input = c
                         c.start(Cfg.deviceFilter, callback)
@@ -313,6 +315,14 @@ class KeymapService : Service() {
         input = null
         setStatus("무선 ADB 서버 연결 끊김 — 재접속 시도")
         retryAdb(3000)
+    }
+
+    /** 물리 키보드 연결 중 화면 키보드 표시 설정을 셸 권한으로 적용 */
+    fun applyIme() {
+        val svc = input ?: return
+        io.execute {
+            try { svc.setImeWithHardKeyboard(Cfg.imeWithKeyboard) } catch (t: Throwable) { Diag.w("SVC", "화면 키보드 설정 실패: ${t.message}") }
+        }
     }
 
     fun restartInput() {

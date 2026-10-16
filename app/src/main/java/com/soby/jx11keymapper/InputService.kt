@@ -121,6 +121,18 @@ class InputService : IInputService.Stub() {
         report("I", "SVC", "장치 독점(GRAB) 요청: $on")
     }
 
+    override fun setImeWithHardKeyboard(show: Boolean) {
+        try {
+            val v = if (show) "1" else "0"
+            val p = Runtime.getRuntime().exec(arrayOf("settings", "put", "secure", "show_ime_with_hard_keyboard", v))
+            val rc = p.waitFor()
+            val err = p.errorStream.bufferedReader().readText().trim()
+            report(if (rc == 0) "I" else "W", "SVC", "화면 키보드 표시(물리 키보드 연결 중) = $v rc=$rc ${err.take(200)}")
+        } catch (e: Throwable) {
+            report("E", "SVC", "화면 키보드 설정 실패: ${chain(e)}")
+        }
+    }
+
     @Volatile
     private var cb: IEventCallback? = null
 
