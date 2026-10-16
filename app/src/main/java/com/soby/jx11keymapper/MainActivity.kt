@@ -130,16 +130,12 @@ class MainActivity : Activity() {
             { ((Cfg.threshold / 0.25f).roundToInt() - 1).coerceIn(0, 11) },
             { Cfg.threshold = (it + 1) * 0.25f },
             { "%.2f칸 (1.00 = 한 번 밀 때마다 동작, 작을수록 민감)".format((it + 1) * 0.25f) }))
-        root.addView(slider("스와이프 최소 이동량 (JX-11 휠 한 칸 인식)", 19,
-            { ((Cfg.swipeMinPermille / 5) - 1).coerceIn(0, 19) },
-            { Cfg.swipeMinPermille = (it + 1) * 5 },
-            { "%.1f%% (작을수록 민감, 너무 작으면 떨림도 인식)".format((it + 1) * 0.5f) }))
         root.addView(slider("연속 동작 간격", 50,
             { (Cfg.cooldownMs / 10).coerceIn(0, 50) },
             { Cfg.cooldownMs = it * 10 },
             { "${it * 10}ms (작을수록 빠름)" }))
-        root.addView(slider("볼륨·방향키 한 번에 반복", 4,
-            { (Cfg.stepsPerFire - 1).coerceIn(0, 4) },
+        root.addView(slider("휠 한 칸 돌릴 때 반복 횟수 (볼륨·방향키·페이지)", 49,
+            { (Cfg.stepsPerFire - 1).coerceIn(0, 49) },
             { Cfg.stepsPerFire = it + 1 },
             { "${it + 1}번" }))
 
@@ -156,7 +152,7 @@ class MainActivity : Activity() {
             KeymapService.instance?.applyIme()
         }))
         root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
-        root.addView(sw("미디어 볼륨 고정 (끄면 실제 볼륨키와 동일)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it }))
+        root.addView(sw("미디어 볼륨만 조절 (켜면 볼륨 키 입력 대신 미디어 볼륨을 직접 조절 → 이북 페이지 넘김은 안 됨)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it; Cfg.save() }))
         root.addView(sw("볼륨 UI 표시", { Cfg.showUi }, { Cfg.showUi = it }))
         root.addView(sw("화면 꺼져도 확실히 동작 (배터리 더 사용)", { Cfg.wakeLock }, {
             Cfg.wakeLock = it

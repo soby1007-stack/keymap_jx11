@@ -171,14 +171,14 @@ object ActionRunner {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             when (act.kind) {
                 Kind.VOLUME -> {
-                    if (Cfg.volumeKey && shell != null) {
+                    if (Cfg.volumeKey && !Cfg.mediaFixed && shell != null) {
                         // 진짜 볼륨 키 입력 주입: 이북 앱 등 포그라운드 앱이 볼륨키로 페이지를 넘기는 경우에도 동작,
                         // 앱이 안 받으면 시스템이 볼륨을 조절한다
                         val kc = if (act == Act.VOL_UP) KeyEvent.KEYCODE_VOLUME_UP else KeyEvent.KEYCODE_VOLUME_DOWN
                         repeat(n) { shell.sendKey(kc) }
                         Diag.v("ACTION", "볼륨 키 주입 keycode=$kc x$n")
                     } else {
-                        if (Cfg.volumeKey) Diag.w("ACTION", "볼륨 키 주입하려면 Shizuku 연결 필요 → AudioManager로 대체")
+                        if (Cfg.volumeKey && !Cfg.mediaFixed) Diag.w("ACTION", "볼륨 키 주입하려면 셸 연결 필요 → AudioManager로 대체")
                         VolumeAction.apply(ctx, act == Act.VOL_UP, n)
                     }
                 }

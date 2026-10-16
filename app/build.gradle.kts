@@ -14,8 +14,8 @@ android {
         minSdk = 26
         targetSdk = 34
         ndk { abiFilters += "arm64-v8a" }
-        versionCode = 16
-        versionName = "0.5.6"
+        versionCode = 18
+        versionName = "0.5.8"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)
