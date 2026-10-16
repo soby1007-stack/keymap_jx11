@@ -365,28 +365,52 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** 버튼 한 번: 알림 권한 확인 → 무선 디버깅 화면 열기 + 연결 마법사(알림에 코드 입력창) 시작 */
     private fun startAdbPairing() {
-        AlertDialog.Builder(this)
-            .setTitle("무선 ADB 연결")
-            .setMessage("1) 설정 > 개발자 옵션 > 무선 디버깅 을 켭니다 (Wi-Fi 연결 필요)\n" +
-                "2) 무선 디버깅 안의 '페어링 코드로 기기 페어링'을 누릅니다\n" +
-                "3) 알림창의 [코드 입력]에 6자리 코드를 입력합니다\n\n" +
-                "한 번 연결하면 Wi-Fi를 꺼도 재부팅 전까지 유지돼요. 이미 페어링했다면 무선 디버깅만 켜 두면 자동으로 이어집니다.")
-            .setPositiveButton("시작") { _, _ ->
-                try {
-                    AdbPairingService.start(this)
-                } catch (t: Throwable) {
-                    Diag.e("UI", "무선 ADB 마법사 시작 실패", t)
-                    toast("시작 실패: ${t.message}")
-                }
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                } catch (t: Throwable) {
-                    Diag.w("UI", "개발자 옵션 열기 실패: ${t.message}")
-                }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Diag.i("UI", "알림 권한 요청 (무선 ADB 용)")
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
+            return
+        }
+        Diag.i("UI", "무선 ADB 연결 버튼 · 무선 디버깅 설정 열기 + 서비스 시작")
+        try {
+            AdbPairingService.start(this)
+        } catch (t: Throwable) {
+            Diag.e("UI", "무선 ADB 마법사 시작 실패", t)
+            toast("시작 실패: ${t.message}")
+            return
+        }
+        openWirelessDebugging()
+        toast("무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 상단바 알림에 코드 입력창이 떠요")
+    }
+
+    @Deprecated("Deprecated in Activity")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        Diag.i("UI", "권한 요청 결과 code=$requestCode 허용=$ok")
+        if (requestCode == 7001 && ok) startAdbPairing()
+    }
+
+    /** 개발자 옵션을 열고 '무선 디버깅' 항목으로 바로 스크롤·강조 (Shizuku 와 같은 방식). 실패하면 개발자 옵션만 연다 */
+    private fun openWirelessDebugging() {
+        val key = "toggle_adb_wireless"
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                .putExtra(":settings:fragment_args_key", key)
+                .putExtra(":settings:show_fragment_args", Bundle().apply { putString(":settings:fragment_args_key", key) })
+            startActivity(intent)
+            Diag.i("UI", "무선 디버깅 항목으로 이동")
+        } catch (t: Throwable) {
+            Diag.w("UI", "무선 디버깅 바로가기 실패 → 개발자 옵션만 열기: ${t.message}")
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+            } catch (t2: Throwable) {
+                Diag.w("UI", "개발자 옵션 열기 실패: ${t2.message}")
             }
-            .setNegativeButton("취소", null)
-            .show()
+        }
     }
 
     private fun killAdb() {

@@ -38,7 +38,8 @@ object AdbServer {
 
     private fun run(args: Array<String>) {
         val port = args[0].toInt()
-        val token = args[1]
+        // 토큰은 환경변수로 받는다 (명령줄에 안 남김). 인자도 허용
+        val token = System.getenv("JX11_TOKEN")?.takeIf { it.length >= 16 } ?: args.getOrNull(1) ?: error("토큰 없음")
         val svc = InputService()
         val ss = ServerSocket()
         ss.reuseAddress = true

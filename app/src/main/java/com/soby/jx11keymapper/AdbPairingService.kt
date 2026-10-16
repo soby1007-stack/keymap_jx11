@@ -18,8 +18,12 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** mDNS 로 무선 디버깅의 페어링 포트/연결 포트를 찾는다 */
-class AdbDiscovery(ctx: Context) {
+/**
+ * mDNS 로 무선 디버깅의 페어링/연결 포트를 찾는다. (BA 앱 방식)
+ * - 같은 Wi-Fi 의 다른 기기 서비스도 잡히므로, 이 폰에서 실제로 열려 있는 포트만 인정 (바인드 시도로 확인)
+ * - 자기 자신에게 붙는 것이므로 host 는 항상 127.0.0.1
+ */
+class AdbDiscovery(ctx: Context, private val onPairing: (Ep?) -> Unit) {
     data class Ep(val host: String, val port: Int, val name: String)
 
     @Volatile var pairing: Ep? = null
@@ -29,6 +33,14 @@ class AdbDiscovery(ctx: Context) {
     private val queue = LinkedBlockingQueue<NsdServiceInfo>()
     private val listeners = ArrayList<NsdManager.DiscoveryListener>()
     @Volatile private var running = false
+
+    /** 이 포트를 바인드할 수 없으면 = 이 폰의 adbd 가 쓰는 중 */
+    private fun isLocalPortOpen(port: Int): Boolean = try {
+        java.net.ServerSocket(port).close()
+        false
+    } catch (e: java.io.IOException) {
+        true
+    }
 
     @Suppress("DEPRECATION")
     fun start() {
@@ -51,11 +63,20 @@ class AdbDiscovery(ctx: Context) {
                         }
 
                         override fun onServiceResolved(si: NsdServiceInfo) {
-                            val host = si.host?.hostAddress?.substringBefore('%')
-                            if (host != null) {
-                                val ep = Ep(host, si.port, si.serviceName)
-                                if (si.serviceType.contains("pairing")) pairing = ep else connect = ep
-                                Diag.i("ADB", "mDNS ${if (si.serviceType.contains("pairing")) "페어링" else "연결"} 포트 발견: $host:${si.port}")
+                            val isPair = si.serviceType.contains("pairing")
+                            val port = si.port
+                            val local = port > 0 && isLocalPortOpen(port)
+                            Diag.i("ADB", "mDNS resolve ${si.serviceName} → ${si.host?.hostAddress}:$port 로컬포트열림=$local")
+                            if (local) {
+                                val ep = Ep("127.0.0.1", port, si.serviceName)
+                                if (isPair) {
+                                    pairing = ep
+                                    onPairing(ep)
+                                } else {
+                                    connect = ep
+                                }
+                            } else {
+                                Diag.w("ADB", "다른 기기의 서비스로 판단해 무시")
                             }
                             latch.countDown()
                         }
@@ -66,7 +87,7 @@ class AdbDiscovery(ctx: Context) {
                 }
             }
         }
-        for (type in listOf("_adb-tls-pairing._tcp", "_adb-tls-connect._tcp")) {
+        for (type in listOf("_adb-tls-pairing._tcp.", "_adb-tls-connect._tcp.")) {
             val l = object : NsdManager.DiscoveryListener {
                 override fun onStartDiscoveryFailed(serviceType: String?, errorCode: Int) {
                     Diag.e("ADB", "mDNS 탐색 시작 실패 $serviceType code=$errorCode")
@@ -81,7 +102,11 @@ class AdbDiscovery(ctx: Context) {
                 }
                 override fun onServiceLost(si: NsdServiceInfo) {
                     if (si.serviceType.contains("pairing")) {
-                        if (pairing?.name == si.serviceName) pairing = null
+                        if (pairing?.name == si.serviceName) {
+                            Diag.i("ADB", "페어링 창이 닫힘")
+                            pairing = null
+                            onPairing(null)
+                        }
                     } else if (connect?.name == si.serviceName) {
                         connect = null
                     }
@@ -108,7 +133,8 @@ class AdbDiscovery(ctx: Context) {
 /**
  * 무선 ADB 연결 마법사 (포그라운드 서비스).
  * 1) 이미 서버가 떠 있으면 끝  2) 이전에 페어링했다면 연결 포트로 바로 서버 기동
- * 3) 아니면 페어링 포트를 찾아 알림에 6자리 코드 입력창을 띄움 → 페어링 → 서버 기동
+ * 3) 아니면 상태 알림의 [코드 입력]으로 페어링 → 서버 기동
+ * 앱의 [무선 ADB 연결] 버튼을 누를 때마다 처음부터 다시 시작한다.
  */
 class AdbPairingService : Service() {
 
@@ -132,8 +158,10 @@ class AdbPairingService : Service() {
 
     private var disc: AdbDiscovery? = null
     private val codes = LinkedBlockingQueue<String>()
-    @Volatile private var cancelled = false
+    private val genLock = Any()
+    @Volatile private var flowGen = 0
     @Volatile private var ok = false
+    @Volatile private var alertedPort = -1
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -141,175 +169,255 @@ class AdbPairingService : Service() {
         super.onCreate()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CH_STATUS, "무선 ADB 연결 상태", NotificationManager.IMPORTANCE_LOW))
-        nm.createNotificationChannel(NotificationChannel(CH_ALERT, "무선 ADB 페어링 코드 입력", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_ALERT, "무선 ADB 페어링 코드 알림", NotificationManager.IMPORTANCE_HIGH).apply {
+            enableVibration(true)
+            setShowBadge(false)
+        })
+        Diag.i("ADB", "알림 허용=${nm.areNotificationsEnabled()} · 팝업채널 중요도=${nm.getNotificationChannel(CH_ALERT)?.importance}")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                cancelled = true
+                synchronized(genLock) { flowGen++ }
+                running = false
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_CODE -> {
                 val code = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_CODE)?.toString()?.trim()
+                Diag.i("ADB", "알림에서 입력 수신 · 길이=${code?.length ?: -1}")
                 if (!code.isNullOrEmpty()) {
-                    Diag.i("ADB", "알림에서 페어링 코드 입력됨")
+                    cancelAlert()
                     codes.offer(code)
-                    notifyAlert("코드 확인 중…", false, null)
+                    setState("입력 확인 중…")
                 }
                 return START_NOT_STICKY
             }
         }
-        if (running) return START_NOT_STICKY
-        running = true
-        cancelled = false
-        goForeground("시작 중…")
-        disc = AdbDiscovery(this).also { it.start() }
-        thread(name = "jx11-adb-flow") {
-            try {
-                flow()
-            } catch (t: Throwable) {
-                Diag.e("ADB", "연결 마법사 오류", t)
-                setState("오류: ${t.message}")
-            } finally {
-                disc?.stop()
-                running = false
-                if (!ok) (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)
-                stopSelf()
-            }
-        }
+        restartFlow()
         return START_NOT_STICKY
     }
 
+    /** 버튼을 누를 때마다 이전 흐름을 버리고 처음부터 다시 */
+    private fun restartFlow() {
+        val gen = synchronized(genLock) { ++flowGen }
+        Diag.i("ADB", "연결 흐름 시작 (gen=$gen)")
+        running = true
+        ok = false
+        alertedPort = -1
+        codes.clear()
+        cancelAlert()
+        goForeground("시작 중…")
+        disc?.stop()
+        disc = AdbDiscovery(this) { ep -> onPairingEndpoint(gen, ep) }.also { it.start() }
+        thread(name = "jx11-adb-flow-$gen") {
+            try {
+                flow(gen)
+            } catch (t: Throwable) {
+                Diag.e("ADB", "연결 마법사 오류", t)
+                if (gen == flowGen) setState("오류: ${t.message}")
+            } finally {
+                if (gen == flowGen) {
+                    disc?.stop()
+                    running = false
+                    if (!ok) cancelAlert()
+                    stopSelf()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
-        cancelled = true
+        synchronized(genLock) { flowGen++ }
         disc?.stop()
         super.onDestroy()
     }
 
-    private fun waitFor(timeoutMs: Long, cond: () -> Boolean): Boolean {
+    /** 설정의 '페어링 코드' 창이 뜨면 팝업 알림, 닫히면 정리 (같은 포트로 여러 번 resolve 되므로 포트가 바뀔 때만) */
+    private fun onPairingEndpoint(gen: Int, ep: AdbDiscovery.Ep?) {
+        if (gen != flowGen) return
+        if (ep == null) {
+            cancelAlert()
+            alertedPort = -1
+            return
+        }
+        if (alertedPort != ep.port) {
+            alertedPort = ep.port
+            alertCodeReady()
+        }
+    }
+
+    private fun alive(gen: Int) = gen == flowGen
+
+    private fun waitFor(gen: Int, timeoutMs: Long, cond: () -> Boolean): Boolean {
         val end = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < end && !cancelled) {
+        while (System.currentTimeMillis() < end && alive(gen)) {
             if (cond()) return true
             Thread.sleep(300)
         }
         return cond()
     }
 
-    private fun flow() {
-        // 1) 이미 서버가 떠 있나?
+    private fun flow(gen: Int) {
+        // 1) 이미 최신 서버가 떠 있나?
         setState("기존 서버 확인 중…")
-        if (Cfg.adbPort != 0 && Cfg.adbToken.isNotEmpty()) {
-            val c = SocketInput(Cfg.adbPort, Cfg.adbToken)
-            val r = c.connect()
-            c.close()
-            if (r == SocketInput.Result.OK) {
-                done("이미 서버가 실행 중입니다")
-                return
-            }
-            Diag.i("ADB", "기존 서버 상태: $r")
+        if (AdbBridge.probe() == SocketInput.Result.OK) {
+            done("이미 서버가 실행 중입니다")
+            return
         }
 
         // 2) 이전에 페어링했다면 연결 포트만으로 기동
-        setState("무선 디버깅 연결 포트 찾는 중… (설정에서 무선 디버깅을 켜세요)")
-        if (waitFor(6000) { disc?.connect != null }) {
+        setState("무선 디버깅 연결 포트 찾는 중… (무선 디버깅을 켜 두세요)")
+        if (waitFor(gen, 6000) { disc?.connect != null }) {
             val ep = disc!!.connect!!
-            setState("서버 기동 중… (${ep.host}:${ep.port})")
+            setState("서버 기동 중… (포트 ${ep.port})")
             val err = AdbBridge.launchServer(this, ep.host, ep.port)
             if (err == null) {
-                done("연결 완료 — 서버 실행됨")
+                done("연결 완료 ✓ · 이제 무선 디버깅을 꺼도 됩니다 (재부팅 전까지)")
                 return
             }
             Diag.w("ADB", "연결 포트로 바로 기동 실패 → 페어링 필요할 수 있음: $err")
         }
+        if (!alive(gen)) return
 
-        // 3) 페어링: 알림에 코드 입력창
-        setState("무선 디버깅 > '페어링 코드로 기기 페어링' 을 누르세요")
-        val end = System.currentTimeMillis() + 4 * 60_000L
-        while (System.currentTimeMillis() < end && !cancelled) {
-            val pe = disc?.pairing
-            if (pe == null) {
-                notifyAlert("설정 > 무선 디버깅 > '페어링 코드로 기기 페어링' 을 누르세요", false, null)
-                Thread.sleep(500)
+        // 3) 페어링: 상태 알림에 처음부터 [코드 입력] 이 달려 있음. 포트를 못 찾으면 '포트 코드' 로도 입력 가능
+        setState("'페어링 코드로 기기 페어링'을 누르고, 알림의 [코드 입력]에 6자리 코드를 입력하세요")
+        val end = System.currentTimeMillis() + 5 * 60_000L
+        while (System.currentTimeMillis() < end && alive(gen)) {
+            val raw = codes.poll(1, TimeUnit.SECONDS) ?: continue
+            val parsed = parsePairInput(raw)
+            if (parsed == null) {
+                setState("6자리 숫자를 입력해주세요 (포트가 안 잡히면 '37755 123456' 형식)")
+                alertCodeReady("입력 형식 오류", "6자리 코드를 다시 입력하세요")
                 continue
             }
-            notifyAlert("알림 아래의 [코드 입력]을 눌러 6자리 코드를 입력하세요", true, pe)
-            setState("페어링 코드를 알림에 입력하세요")
-            val code = codes.poll(1, TimeUnit.SECONDS) ?: continue
-            if (disc?.pairing == null) {
-                notifyAlert("페어링 창이 닫혔어요. 다시 '페어링 코드로 기기 페어링'을 누르세요", false, null)
+            val cur = disc?.pairing
+            val port = parsed.first ?: cur?.port
+            if (port == null) {
+                setState("페어링 화면을 못 찾았어요. '페어링 코드로 기기 페어링'을 먼저 열어주세요")
+                alertCodeReady("페어링 화면을 못 찾았어요", "'페어링 코드로 기기 페어링'을 연 뒤 다시 입력하세요")
                 continue
             }
-            setState("페어링 중…")
+            setState("ADB 페어링 중…")
             try {
-                AdbBridge.pair(this, pe.host, pe.port, code)
+                AdbBridge.pair(this, "127.0.0.1", port, parsed.second)
             } catch (t: Throwable) {
                 Diag.e("ADB", "페어링 실패", t)
-                notifyAlert("페어링 실패 (코드 확인): ${t.message}", false, null)
-                setState("페어링 실패 — 다시 시도")
-                Thread.sleep(1500)
+                alertedPort = -1
+                setState("페어링 실패 · 코드를 다시 입력하세요")
+                alertCodeReady("페어링 실패", "코드를 다시 확인하고 입력하세요")
                 continue
             }
-            setState("페어링 완료 — 연결 포트 대기 중…")
-            if (!waitFor(15000) { disc?.connect != null }) {
-                setState("연결 포트를 못 찾음 — 무선 디버깅이 켜져 있는지 확인")
-                notifyAlert("연결 포트를 못 찾았어요. 무선 디버깅 화면을 열어 둔 채 다시 시도", false, null)
-                continue
+            setState("페어링 성공 · 연결 포트 검색 중…")
+            var cport: Int? = null
+            if (waitFor(gen, 15000) { disc?.connect != null }) {
+                cport = disc!!.connect!!.port
+            } else {
+                setState("페어링 완료! 무선 디버깅 화면 위쪽 'IP 주소 및 포트'의 포트(5자리)를 입력하세요")
+                alertCodeReady("연결 포트가 필요해요", "무선 디버깅 화면의 포트(5자리)를 입력하세요")
+                val e2 = System.currentTimeMillis() + 120_000L
+                while (System.currentTimeMillis() < e2 && alive(gen) && cport == null) {
+                    val ce = disc?.connect
+                    if (ce != null) {
+                        cport = ce.port
+                        break
+                    }
+                    val t = codes.poll(1, TimeUnit.SECONDS) ?: continue
+                    cport = Regex("(\\d{4,5})\\s*$").find(t.trim())?.groupValues?.get(1)?.toIntOrNull()
+                }
             }
-            val ce = disc!!.connect!!
+            if (cport == null) {
+                setState("연결 포트를 못 찾음 — [무선 ADB 연결]을 다시 눌러 주세요 (페어링은 완료됨)")
+                return
+            }
             setState("서버 기동 중…")
-            val err = AdbBridge.launchServer(this, ce.host, ce.port)
+            val err = AdbBridge.launchServer(this, "127.0.0.1", cport)
             if (err == null) {
-                done("페어링·연결 완료 — 서버 실행됨")
+                done("연결 완료 ✓ · 이제 무선 디버깅을 꺼도 됩니다 (재부팅 전까지)")
                 return
             }
             setState("서버 기동 실패: $err")
-            notifyAlert("서버 기동 실패: $err", false, null)
             return
         }
-        setState(if (cancelled) "취소됨" else "시간 초과 (4분)")
+        if (alive(gen)) setState("시간 초과 (5분)")
+    }
+
+    /** "123456" → (null, 코드) / "37755 123456" 또는 "192.168.0.5:37755 123456" → (포트, 코드) */
+    private fun parsePairInput(raw: String): Pair<Int?, String>? {
+        val t = raw.trim()
+        if (Regex("^\\d{6}$").matches(t)) return Pair(null, t)
+        val m = Regex("^(?:(?:\\d{1,3}\\.){3}\\d{1,3}:)?(\\d{4,5})[\\s,]+(\\d{6})$").find(t) ?: return null
+        return Pair(m.groupValues[1].toIntOrNull(), m.groupValues[2])
     }
 
     private fun done(msg: String) {
         ok = true
-        setState(msg)
+        setState(msg, input = false)
         Diag.i("ADB", msg)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(NID_ALERT)
         KeymapService.instance?.reconnectAdb()
         nm.notify(NID_ALERT, Notification.Builder(this, CH_STATUS)
             .setContentTitle("무선 ADB").setContentText(msg)
+            .setStyle(Notification.BigTextStyle().bigText(msg))
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setAutoCancel(true).setTimeoutAfter(15000).build())
+            .setAutoCancel(true).setTimeoutAfter(20000).build())
     }
 
-    private fun setState(s: String) {
+    private fun setState(s: String, input: Boolean = true) {
         state = s
         Diag.i("ADB", "상태: $s")
         try {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NID_STATUS, statusNotification(s))
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NID_STATUS, statusNotification(s, input))
         } catch (t: Throwable) {
             Diag.w("ADB", "알림 갱신 실패: ${t.message}")
         }
     }
 
-    private fun statusNotification(text: String): Notification {
+    /** 코드 입력창(RemoteInput) 액션. 스마트 답장/시스템 추천 동작이 끼어들지 않게 막는다 */
+    private fun codeInputAction(): Notification.Action {
+        val ri = RemoteInput.Builder(KEY_CODE)
+            .setLabel("6자리 페어링 코드")
+            .build()
+        val pi = PendingIntent.getService(
+            this, 2001, Intent(this, AdbPairingService::class.java).setAction(ACTION_CODE),
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        @Suppress("DEPRECATION")
+        return Notification.Action.Builder(android.R.drawable.ic_input_add, "코드 입력", pi)
+            .addRemoteInput(ri)
+            .setAllowGeneratedReplies(false)
+            .setSemanticAction(Notification.Action.SEMANTIC_ACTION_NONE)
+            .build()
+    }
+
+    private fun statusNotification(text: String, input: Boolean): Notification {
         val stop = PendingIntent.getService(
             this, 3, Intent(this, AdbPairingService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        return Notification.Builder(this, CH_STATUS)
+        val b = Notification.Builder(this, CH_STATUS)
             .setContentTitle("무선 ADB 연결")
             .setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))   // 긴 상태 문구도 다 보이게
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .addAction(0, "취소", stop)
             .setOngoing(true)
-            .build()
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_STATUS)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .setAllowSystemGeneratedContextualActions(false)
+        if (input) b.addAction(codeInputAction())
+        @Suppress("DEPRECATION")
+        b.addAction(0, "취소", stop)
+        return b.build()
     }
 
     private fun goForeground(text: String) {
-        val n = statusNotification(text)
+        state = text
+        val n = statusNotification(text, true)
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NID_STATUS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -317,31 +425,32 @@ class AdbPairingService : Service() {
         }
     }
 
-    /** 코드 입력 알림 (RemoteInput). 스마트 답장/숫자 복사 버튼이 끼어들지 않게 막는다 */
-    private fun notifyAlert(text: String, withInput: Boolean, ep: AdbDiscovery.Ep?) {
-        val b = Notification.Builder(this, CH_ALERT)
-            .setContentTitle("무선 ADB 페어링")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setOnlyAlertOnce(true)
-            .setAllowSystemGeneratedContextualActions(false)
-        if (withInput) {
-            val ri = RemoteInput.Builder(KEY_CODE).setLabel("6자리 코드").build()
-            val pi = PendingIntent.getService(
-                this, 2, Intent(this, AdbPairingService::class.java).setAction(ACTION_CODE),
-                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            @Suppress("DEPRECATION")
-            val action = Notification.Action.Builder(android.R.drawable.ic_menu_edit, "코드 입력", pi)
-                .addRemoteInput(ri)
-                .setAllowGeneratedReplies(false)
-                .build()
-            b.addAction(action)
-        }
+    /**
+     * 페어링 코드 창이 뜬 순간 별도 알림을 헤드업(팝업)으로 띄운다. 상시 알림은 내용만 바뀌고 팝업이 안 뜨기 때문.
+     * 헤드업에서 바로 [코드 입력]을 누르면 알림창 전체를 내리지 않아 코드가 덜 가려진다.
+     * 문구에 숫자를 넣지 않는다 (삼성이 '복사' 버튼을 붙임).
+     */
+    private fun alertCodeReady(title: String = "페어링 코드가 떴어요", text: String = "설정 화면의 코드를 입력하세요") {
         try {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NID_ALERT, b.build())
+            val n = Notification.Builder(this, CH_ALERT)
+                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setTimeoutAfter(120_000)
+                .setAllowSystemGeneratedContextualActions(false)
+                .addAction(codeInputAction())
+                .build()
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NID_ALERT, n)
+            Diag.i("ADB", "팝업 알림 표시: $title")
         } catch (t: Throwable) {
-            Diag.w("ADB", "코드 입력 알림 실패: ${t.message}")
+            Diag.e("ADB", "팝업 알림 실패", t)
         }
+    }
+
+    private fun cancelAlert() {
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)
     }
 }
