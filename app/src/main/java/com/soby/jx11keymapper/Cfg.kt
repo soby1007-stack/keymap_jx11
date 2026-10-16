@@ -41,6 +41,9 @@ object Cfg {
     @Volatile var showUi: Boolean = true
     @Volatile var wakeLock: Boolean = true
     @Volatile var enabled: Boolean = false      // 사용자가 켜 둔 상태
+    @Volatile var einkBlackMs: Int = 300        // E-ink 새로고침: 검정 유지 시간
+    @Volatile var einkWhiteMs: Int = 300        // E-ink 새로고침: 흰색 유지 시간
+    @Volatile var einkRepeat: Int = 1           // E-ink 새로고침: 검정↔흰색 반복 횟수
 
     // ── 프리셋 ──
     @Volatile var presets: List<Preset> = emptyList()
@@ -239,6 +242,9 @@ object Cfg {
         showUi = p.getBoolean("showUi", true)
         wakeLock = p.getBoolean("wakeLock", true)
         enabled = p.getBoolean("enabled", false)
+        einkBlackMs = p.getInt("einkBlackMs", 300)
+        einkWhiteMs = p.getInt("einkWhiteMs", 300)
+        einkRepeat = p.getInt("einkRepeat", 1)
 
         val saved = p.getString("presets", null)
         val list = ArrayList<Preset>()
@@ -292,11 +298,14 @@ object Cfg {
             ?.putBoolean("showUi", showUi)
             ?.putBoolean("wakeLock", wakeLock)
             ?.putBoolean("enabled", enabled)
+            ?.putInt("einkBlackMs", einkBlackMs)
+            ?.putInt("einkWhiteMs", einkWhiteMs)
+            ?.putInt("einkRepeat", einkRepeat)
             ?.apply()
     }
 
     fun describe(): String =
         "필터='$deviceFilter' 프리셋=${presets.joinToString { "${it.name}(앱${it.apps.size}${if (it.fallback) ",나머지" else ""},unit=${it.unit},cd=${it.cooldown},steps=${it.steps})" }} " +
             "편집=$editId 적용=$runtimeId idle=${idleResetMs}ms media=$mediaFixed backend=$backend adbPort=$adbPort " +
-            "vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled"
+            "vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled eink=${einkBlackMs}/${einkWhiteMs}ms x$einkRepeat"
 }

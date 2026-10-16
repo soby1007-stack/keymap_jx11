@@ -2,24 +2,19 @@ package com.soby.jx11keymapper
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.graphics.PixelFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.view.View
-import android.view.WindowManager
 
 /**
- * E-ink 잔상 제거: 전체 화면을 검정→흰색으로 잠깐 덮는다 (기기 전용 API 없이 어디서나 동작).
- * '다른 앱 위에 표시' 권한 필요 (셸 연결 시 appops 로 자동 허용).
+ * E-ink 잔상 제거: 전체 화면을 완전한 검정→흰색으로 덮는다 (기기 전용 API 없이 어디서나 동작).
+ * 덮는 화면은 EinkFlashActivity. '다른 앱 위에 표시' 권한이 있으면 백그라운드에서도 띄울 수 있다
+ * (셸 연결 시 appops 로 자동 허용).
  */
 object EinkRefresh {
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var busy = false
-
-    const val STEP_MS = 260L
+    @Volatile var busy = false
 
     fun hasPermission(ctx: Context) = Settings.canDrawOverlays(ctx)
 
@@ -32,34 +27,17 @@ object EinkRefresh {
         if (busy) return
         busy = true
         main.post {
-            var v: View? = null
-            val wm = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             try {
-                val view = View(app).apply { setBackgroundColor(Color.BLACK) }
-                v = view
-                val lp = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                    PixelFormat.OPAQUE
+                app.startActivity(
+                    Intent(app, EinkFlashActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 )
-                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                wm.addView(view, lp)
-                main.postDelayed({ view.setBackgroundColor(Color.WHITE) }, STEP_MS)
-                main.postDelayed({
-                    try { wm.removeView(view) } catch (t: Throwable) { Diag.w("EINK", "오버레이 제거 실패: ${t.message}") }
-                    busy = false
-                }, STEP_MS * 2)
-                Diag.i("EINK", "화면 새로고침 (검정→흰색)")
             } catch (t: Throwable) {
-                Diag.e("EINK", "화면 새로고침 실패", t)
-                try { v?.let { wm.removeView(it) } } catch (e: Throwable) { /* 무시 */ }
+                Diag.e("EINK", "새로고침 화면 실행 실패", t)
                 busy = false
             }
+            // 안전장치: 혹시 화면이 안 뜨면 잠금이 영원히 남지 않게
+            main.postDelayed({ busy = false }, 15_000)
         }
     }
 

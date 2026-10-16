@@ -714,7 +714,21 @@ class MainActivity : Activity() {
 
         box.addView(sectionTitle("E-ink 새로고침"))
         val ce = card()
-        ce.addView(note("전체 화면을 검정→흰색으로 잠깐 덮어 잔상을 지워요. 기능 목록의 'E-ink 화면 새로고침'에 JX-11 키를 지정해 쓰세요. '다른 앱 위에 표시' 권한이 필요하고, 셸 연결 때 자동 허용돼요."))
+        ce.addView(note("전체 화면을 완전한 검정→흰색으로 잠깐 덮어 잔상을 지워요. 기능 목록의 'E-ink 화면 새로고침'에 JX-11 키를 지정해 쓰세요. '다른 앱 위에 표시' 권한이 필요하고, 셸 연결 때 자동 허용돼요. 시간 기본값은 근거 없이 정한 값이라 기기에서 맞춰 보세요."))
+        sliderRow(ce, "검정 유지 시간", "검정 화면을 보여주는 시간", 19,
+            { (Cfg.einkBlackMs / 100 - 1).coerceIn(0, 19) },
+            { Cfg.einkBlackMs = (it + 1) * 100 },
+            { "${(it + 1) * 100}ms" })
+        divider(ce)
+        sliderRow(ce, "흰색 유지 시간", "흰 화면을 보여주는 시간", 19,
+            { (Cfg.einkWhiteMs / 100 - 1).coerceIn(0, 19) },
+            { Cfg.einkWhiteMs = (it + 1) * 100 },
+            { "${(it + 1) * 100}ms" })
+        divider(ce)
+        sliderRow(ce, "반복 횟수", "검정↔흰색을 몇 번 반복할지", 4,
+            { (Cfg.einkRepeat - 1).coerceIn(0, 4) },
+            { Cfg.einkRepeat = it + 1 },
+            { "${it + 1}번" })
         box.addView(ce)
         box.addView(pill("새로고침 테스트", 1) { EinkRefresh.test(this) }, fullWidth())
 
