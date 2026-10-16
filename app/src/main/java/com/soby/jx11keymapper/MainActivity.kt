@@ -623,7 +623,7 @@ class MainActivity : Activity() {
         ))
 
         box.addView(sectionTitle("입력 모니터 (원본 값)"))
-        box.addView(note("수신한 입력이 최근 것부터 보여요. 새로운 키의 코드를 알아낼 때 쓰세요."))
+        box.addView(note("수신한 입력 원본이 최근 것부터 보여요 (프리셋·지정과 무관). 새로운 키의 코드를 알아낼 때 쓰세요."))
         val mc = card()
         tvMonitor = TextView(this).apply {
             textSize = 11f
@@ -635,13 +635,8 @@ class MainActivity : Activity() {
         box.addView(mc)
         box.addView(pill("지우기", 1) { EventMonitor.clear(); tvMonitor.text = "" }, fullWidth())
 
-        box.addView(sectionTitle("전체 기능 표 (고급)"))
-        box.addView(note("편집 중인 프리셋의 모든 지정이에요. ＋ 누르고 기기를 조작하면 등록, － 는 목록에서 체크를 해제하면 삭제돼요."))
-        val c = card()
-        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        c.addView(tableBox)
-        box.addView(c)
-        box.addView(pill("＋ 기능 추가", 0) { pickActToAdd() }, fullWidth())
+        // 범용기기 탭은 프리셋과 무관하게 입력 원본만 보여준다 (지정은 JX-11 탭에서)
+        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }   // 화면에 붙이지 않음
     }
 
     /** 제목 + 설명 + 스위치 (값은 즉시 호출, 저장은 호출한 쪽에서) */
