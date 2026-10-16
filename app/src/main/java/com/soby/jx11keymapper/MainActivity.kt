@@ -118,7 +118,7 @@ class MainActivity : Activity() {
         tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(tableBox)
         root.addView(label("＋ 를 누르고 JX-11 입력 → 등록 (한 기능에 여러 개 가능) · － 는 목록에서 체크 해제 후 [적용]으로 삭제\n" +
-            "⚡ 는 shell 권한(Shizuku 또는 무선 ADB)이 필요한 동작 · 같은 입력은 한 기능에만 지정돼요").apply { textSize = 12f })
+            "같은 입력은 한 기능에만 지정돼요 (다른 기능에 있던 건 자동으로 옮겨짐)").apply { textSize = 12f })
         root.addView(button("표 기본값으로") {
             Cfg.resetRules()
             toast("기본값으로 복원")
@@ -229,7 +229,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            row.addView(cell(act.label + (if (act.needsShell) " ⚡" else ""), 2.3f, 13f, true))
+            row.addView(cell(act.label, 2.3f, 13f, true))
             row.addView(cell(
                 if (rules.isEmpty()) "-" else rules.joinToString(", ") { it.label() },
                 3.3f, 12f, false, Gravity.CENTER_VERTICAL, if (rules.isEmpty()) 0xFF999999.toInt() else 0xFF1A237E.toInt()
