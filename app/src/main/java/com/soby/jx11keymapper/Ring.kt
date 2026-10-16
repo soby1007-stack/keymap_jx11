@@ -17,24 +17,27 @@ import java.util.concurrent.CopyOnWriteArraySet
 /**
  * JX-11 의 조작 부위. 입력 종류는 기기에서 실제로 관찰한 값 기준:
  * 휠을 위로 굴리면 스와이프 ↓, 아래로 굴리면 스와이프 ↑ (물리 방향과 스와이프 방향이 반대),
- * ">" 키 = 스와이프 ←, "<" 키 = 스와이프 →, 원형 키 = 탭, 타원 키 = 볼륨 내림 키(EV_KEY 114, 추정).
+ * ">" 키 = 스와이프 ←, "<" 키 = 스와이프 →, 원형 키 = 탭, 타원 키 = 볼륨 내림 키(EV_KEY 114, 사용자 확인).
  */
-enum class Part(val title: String, val hint: String, val type: Int, val code: Int) {
+enum class Part(val title: String, val hint: String, val type: Int, val code: Int, val alt: Int = -1) {
     WHEEL_UP("휠 위로 굴림", "스와이프 ↓", EventNames.EV_GESTURE, 2),
     WHEEL_DOWN("휠 아래로 굴림", "스와이프 ↑", EventNames.EV_GESTURE, 1),
     KEY_LEFT("◁ 키", "스와이프 →", EventNames.EV_GESTURE, 4),
     KEY_RIGHT("▷ 키", "스와이프 ←", EventNames.EV_GESTURE, 3),
-    OVAL("타원 키", "볼륨 내림 키 (114)", EventNames.EV_KEY, 114),
+    OVAL("타원 키", "볼륨 내림/올림 (114·115, 누를 때마다 번갈아)", EventNames.EV_KEY, 114, 115),
     CIRCLE("원형 키", "탭", EventNames.EV_GESTURE, 5);
 
     fun rule(): Rule = Rule(type, code, 0)
 
+    /** 이 부위가 보내는 모든 입력 (타원 키는 누를 때마다 내림/올림이 번갈아 와서 둘 다) */
+    fun rules(): List<Rule> = if (alt >= 0) listOf(Rule(type, code, 0), Rule(type, alt, 0)) else listOf(rule())
+
     companion object {
-        fun of(r: Rule): Part? = values().firstOrNull { it.type == r.type && it.code == r.code }
+        fun of(r: Rule): Part? = values().firstOrNull { it.type == r.type && (it.code == r.code || it.alt == r.code) }
 
         fun fromEvent(type: Int, code: Int, value: Int): Part? {
             if (type == EventNames.EV_KEY && value == 0) return null
-            return values().firstOrNull { it.type == type && it.code == code }
+            return values().firstOrNull { it.type == type && (it.code == code || it.alt == code) }
         }
     }
 }

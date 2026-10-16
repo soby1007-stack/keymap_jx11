@@ -246,7 +246,7 @@ class MainActivity : Activity() {
         box.addView(note("그림에서 부위를 누르면 기능을 고를 수 있어요. JX-11을 직접 조작하면 눌린 부위가 주황색으로 칠해지고, 휠은 실제로 굴린 방향 화살표가 나와요. (파란색 = 이미 지정됨)"))
         val rc = card()
         ring = RingView(this)
-        ring.onPart = { p -> pickActForRule("${p.title}  (${p.hint})", p.rule()) }
+        ring.onPart = { p -> pickActForRules("${p.title}  (${p.hint})", p.rules()) }
         rc.addView(ring, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         tvNow = TextView(this).apply {
@@ -266,7 +266,7 @@ class MainActivity : Activity() {
 
         btnOther = pill("", 2) {
             val r = RingEvents.lastOther
-            if (r != null) pickActForRule("그림에 없는 입력: ${r.label()}", r)
+            if (r != null) pickActForRules("그림에 없는 입력: ${r.label()}", listOf(r))
         }
         btnOther.visibility = View.GONE
         box.addView(btnOther, fullWidth())
@@ -298,13 +298,13 @@ class MainActivity : Activity() {
         }
         val parts = Part.values()
         parts.forEachIndexed { i, p ->
-            val act = Act.values().firstOrNull { p.rule() in e.rules(it) }
+            val act = Act.values().firstOrNull { a -> p.rules().any { r -> r in e.rules(a) } }
             if (act != null) assigned.add(p)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(10), 0, dp(10))
-                setOnClickListener { pickActForRule("${p.title}  (${p.hint})", p.rule()) }
+                setOnClickListener { pickActForRules("${p.title}  (${p.hint})", p.rules()) }
             }
             val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             left.addView(TextView(this).apply {
@@ -358,27 +358,27 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 이 입력(rule)에 연결할 기능을 목록에서 고른다. 같은 입력은 한 기능에만 지정돼요 */
-    private fun pickActForRule(title: String, rule: Rule) {
+    /** 이 부위(입력 여러 개일 수 있음)에 연결할 기능을 목록에서 고른다. 같은 입력은 한 기능에만 지정돼요 */
+    private fun pickActForRules(title: String, rules: List<Rule>) {
         val e = Cfg.editing
         if (e == null) {
             toast("프리셋이 없어요. [프리셋] 탭에서 만드세요")
             return
         }
         val acts = Act.values()
-        val cur = acts.firstOrNull { rule in e.rules(it) }
+        val cur = acts.firstOrNull { a -> rules.any { it in e.rules(a) } }
         val names = arrayOf("지정 안 함") + acts.map { (if (it == cur) "✓ " else "") + it.label }
         AlertDialog.Builder(this)
             .setTitle(title)
             .setItems(names) { _, which ->
                 if (which == 0) {
-                    Cfg.removeRuleEverywhere(rule)
-                    Diag.i("UI", "지정 해제: ${rule.label()}")
+                    for (r in rules) Cfg.removeRuleEverywhere(r)
+                    Diag.i("UI", "지정 해제: ${rules.joinToString { it.label() }}")
                     toast("지정 해제")
                 } else {
                     val a = acts[which - 1]
-                    Cfg.addRule(a, rule)
-                    Diag.i("UI", "지정: ${rule.label()} → ${a.label} (프리셋 ${e.name})")
+                    for (r in rules) Cfg.addRule(a, r)
+                    Diag.i("UI", "지정: ${rules.joinToString { it.label() }} → ${a.label} (프리셋 ${e.name})")
                     toast("'${a.label}'에 지정")
                 }
             }
