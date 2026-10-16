@@ -5,7 +5,10 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -19,6 +22,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import android.text.TextUtils
 import android.widget.Toast
 import rikka.shizuku.Shizuku
 import kotlin.math.roundToInt
@@ -35,7 +39,25 @@ class MainActivity : Activity() {
     private lateinit var tvLearn: TextView
     private lateinit var tableBox: LinearLayout
     private lateinit var swRun: Switch
+    private lateinit var tvHint: TextView
+    private lateinit var dot: View
     private lateinit var etFilter: EditText
+    private val tabViews = ArrayList<LinearLayout>()
+    private val tabButtons = ArrayList<TextView>()
+
+    private val cAccent = 0xFF3D5AFE.toInt()
+    private val cBg = 0xFFF3F5F9.toInt()
+    private val cCard = 0xFFFFFFFF.toInt()
+    private val cText = 0xFF1F2430.toInt()
+    private val cSub = 0xFF6B7280.toInt()
+    private val cLine = 0xFFE5E8EF.toInt()
+    private val cOk = 0xFF2E7D32.toInt()
+    private val cWarn = 0xFFEF6C00.toInt()
+    private val cBad = 0xFFC62828.toInt()
+
+    companion object {
+        private var lastTab = 0
+    }
     private var updating = false
     private var renderedVersion = -1
 
@@ -68,119 +90,251 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
-        val root = LinearLayout(this).apply {
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(28))
+            setBackgroundColor(cBg)
         }
 
-        // ── 상태 ──
-        root.addView(title("상태"))
-        tvShizuku = label("")
-        tvStatus = label("")
-        tvLive = label("")
-        tvDevices = label("")
-        root.addView(tvShizuku)
-        root.addView(tvStatus)
-        root.addView(tvLive)
-        root.addView(tvDevices)
-        root.addView(button("Shizuku 권한 요청") { requestShizuku() })
-
-        // ── 연결 방식 (shell 권한을 얻는 방법) ──
-        root.addView(title("연결 방식"))
-        root.addView(label("shell 권한을 Shizuku 또는 무선 ADB(앱이 직접 페어링) 중 어느 쪽으로 얻을지 고릅니다.").apply { textSize = 12f })
-        btnBackend = button("") { chooseBackend() }
-        root.addView(btnBackend)
-        tvAdb = label("")
-        root.addView(tvAdb)
-        root.addView(row(
-            button("무선 ADB 연결(페어링)") { startAdbPairing() },
-            button("ADB 서버 종료") { killAdb() }
-        ))
-
-        swRun = Switch(this).apply {
-            text = "키맵퍼 켜기"
+        // ── 고정 헤더: 상태 + 켜기 스위치 + 학습 안내 ──
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(6))
+        }
+        val statusCard = card()
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        dot = View(this).apply { background = oval(cSub) }
+        top.addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)).apply { rightMargin = dp(10) })
+        tvStatus = TextView(this).apply {
             textSize = 16f
-            setPadding(0, dp(8), 0, dp(8))
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(cText)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        top.addView(tvStatus, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        swRun = Switch(this).apply {
             setOnCheckedChangeListener { _, checked -> if (!updating) onRunToggle(checked) }
         }
-        root.addView(swRun)
-
-        // ── 키 매핑 표 (기능 | 키 매핑 | ＋ | －) ──
-        root.addView(title("키 매핑 (JX-11)"))
-        tvLearn = label("").apply {
-            setTextColor(0xFF5D4037.toInt())
-            setBackgroundColor(0xFFFFF3C4.toInt())
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+        top.addView(swRun)
+        statusCard.addView(top)
+        tvHint = TextView(this).apply {
+            textSize = 13f
+            setTextColor(cWarn)
+            setPadding(0, dp(6), 0, 0)
+            visibility = View.GONE
+            setOnClickListener { selectTab(2) }
+        }
+        statusCard.addView(tvHint)
+        tvDevices = TextView(this).apply {
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(8), 0, 0)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        statusCard.addView(tvDevices)
+        tvLive = TextView(this).apply {
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(2), 0, 0)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        statusCard.addView(tvLive)
+        header.addView(statusCard)
+        tvLearn = TextView(this).apply {
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFFFFFFFF.toInt())
+            background = rounded(cAccent, 12)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
             visibility = View.GONE
             setOnClickListener { Learner.cancel() }
         }
-        root.addView(tvLearn)
-        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(tableBox)
-        root.addView(label("＋ 를 누르고 JX-11 입력 → 등록 (한 기능에 여러 개 가능) · － 는 목록에서 체크 해제 후 [적용]으로 삭제\n" +
-            "같은 입력은 한 기능에만 지정돼요 (다른 기능에 있던 건 자동으로 옮겨짐)").apply { textSize = 12f })
-        root.addView(button("표 기본값으로") {
-            Cfg.resetRules()
-            toast("기본값으로 복원")
-        })
+        header.addView(tvLearn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+        page.addView(header)
 
-        // ── 민감도 ──
-        root.addView(title("민감도"))
-        root.addView(slider("이동 감도: 이만큼 움직일 때마다 1회 동작", 29,
+        // ── 탭 ──
+        val tabBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(0xFFE4E8F0.toInt(), 12)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val tabNames = arrayOf("키 매핑", "민감도", "연결", "설정")
+        for (i in tabNames.indices) {
+            val t = TextView(this).apply {
+                text = tabNames[i]
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener { selectTab(i) }
+            }
+            tabButtons.add(t)
+            tabBar.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        page.addView(tabBar, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(16); rightMargin = dp(16); topMargin = dp(4) })
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(28))
+        }
+        for (i in 0 until 4) {
+            val v = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            tabViews.add(v)
+            content.addView(v)
+        }
+        page.addView(ScrollView(this).apply { addView(content) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        buildMappingTab(tabViews[0])
+        buildSensitivityTab(tabViews[1])
+        buildConnectionTab(tabViews[2])
+        buildSettingsTab(tabViews[3])
+        selectTab(lastTab)
+
+        setContentView(page)
+    }
+
+    private fun selectTab(i: Int) {
+        lastTab = i
+        for (k in tabViews.indices) {
+            tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
+            val sel = k == i
+            tabButtons[k].setTextColor(if (sel) 0xFFFFFFFF.toInt() else cSub)
+            tabButtons[k].setTypeface(null, if (sel) Typeface.BOLD else Typeface.NORMAL)
+            tabButtons[k].background = if (sel) rounded(cAccent, 9) else null
+        }
+    }
+
+    // ───────── 탭 내용 ─────────
+
+    private fun buildMappingTab(box: LinearLayout) {
+        box.addView(sectionTitle("키 매핑 (JX-11)"))
+        box.addView(note("기능에 JX-11 입력을 연결해요. ＋ 누르고 JX-11을 조작하면 등록, － 는 목록에서 체크를 해제하면 삭제돼요. 같은 입력은 한 기능에만 지정돼요."))
+        val c = card()
+        tableBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        c.addView(tableBox)
+        box.addView(c)
+        box.addView(pill("＋ 기능 추가", 0) { pickActToAdd() }, fullWidth())
+        box.addView(pill("표 기본값으로", 1) {
+            AlertDialog.Builder(this)
+                .setTitle("기본값으로 되돌릴까요?")
+                .setMessage("지금 지정한 입력이 모두 사라지고 기본 설정(스와이프 ↑↓ 등)으로 돌아갑니다.")
+                .setPositiveButton("되돌리기") { _, _ ->
+                    Cfg.resetRules()
+                    toast("기본값으로 복원")
+                }
+                .setNegativeButton("취소", null)
+                .show()
+        }, fullWidth())
+    }
+
+    private fun buildSensitivityTab(box: LinearLayout) {
+        box.addView(sectionTitle("민감도"))
+        val c = card()
+        sliderRow(c, "이동 감도", "휠을 이만큼 움직일 때마다 동작 1회. 작을수록 민감해요. (휠 한 칸 ≈ 150~180‰)", 29,
             { ((Cfg.swipeUnitPermille / 10) - 1).coerceIn(0, 29) },
             { Cfg.swipeUnitPermille = (it + 1) * 10 },
-            { "${(it + 1) * 10}‰ (작을수록 민감 · 휠 한 칸 ≈ 150~180‰)" }))
-        root.addView(slider("연속 동작 간격", 50,
+            { "${(it + 1) * 10}‰" })
+        divider(c)
+        sliderRow(c, "연속 동작 간격", "연속 동작 사이의 최소 간격. 작을수록 빠르게 반복돼요.", 50,
             { (Cfg.cooldownMs / 10).coerceIn(0, 50) },
             { Cfg.cooldownMs = it * 10 },
-            { "${it * 10}ms (작을수록 빠름)" }))
-        root.addView(slider("동작 1회당 반복 횟수 (볼륨·방향키·페이지)", 49,
+            { "${it * 10}ms" })
+        divider(c)
+        sliderRow(c, "동작 1회당 반복 횟수", "한 번 동작할 때 볼륨·방향키·페이지 키를 몇 번 누를지", 49,
             { (Cfg.stepsPerFire - 1).coerceIn(0, 49) },
             { Cfg.stepsPerFire = it + 1 },
-            { "${it + 1}번" }))
+            { "${it + 1}번" })
+        box.addView(c)
+        box.addView(pill("볼륨 테스트 ↑↓", 1) {
+            VolumeAction.apply(this, true, 1)
+            h.postDelayed({ VolumeAction.apply(this, false, 1) }, 600)
+        }, fullWidth())
+    }
 
-        // ── 볼륨 동작 ──
-        root.addView(title("볼륨 동작"))
-        root.addView(sw("JX-11 독점: 원래 터치/스크롤 동작 막기 (켜면 서비스 재시작)", { Cfg.grab }, {
+    private fun buildConnectionTab(box: LinearLayout) {
+        box.addView(sectionTitle("연결 상태"))
+        val st = card()
+        tvShizuku = TextView(this).apply { textSize = 14f; setTextColor(cText) }
+        tvAdb = TextView(this).apply {
+            textSize = 14f
+            setTextColor(cText)
+            setPadding(0, dp(8), 0, 0)
+        }
+        st.addView(tvShizuku)
+        st.addView(tvAdb)
+        box.addView(st)
+
+        box.addView(sectionTitle("연결 방식"))
+        box.addView(note("입력을 읽으려면 shell 권한이 필요해요. Shizuku 또는 무선 ADB(앱이 직접 페어링) 중 어느 쪽으로 얻을지 고릅니다."))
+        btnBackend = pill("", 1) { chooseBackend() }
+        box.addView(btnBackend, fullWidth())
+
+        box.addView(sectionTitle("무선 ADB"))
+        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 상단바 알림의 입력창에 6자리 코드를 입력하면 끝! 한 번 연결하면 재부팅 전까지 유지돼요."))
+        box.addView(pill("무선 ADB 연결(페어링)", 0) { startAdbPairing() }, fullWidth())
+        box.addView(pill("Shizuku 권한 요청", 1) { requestShizuku() }, fullWidth())
+        box.addView(pill("ADB 서버 종료", 2) { killAdb() }, fullWidth())
+    }
+
+    private fun buildSettingsTab(box: LinearLayout) {
+        box.addView(sectionTitle("입력"))
+        val c1 = card()
+        switchRow(c1, "JX-11 독점", "원래 터치/스크롤 동작을 막아요", { Cfg.grab }) {
             Cfg.grab = it
             Cfg.save()
             KeymapService.instance?.restartInput()
-        }))
-        root.addView(sw("JX-11 연결 중에도 화면 키보드 표시", { Cfg.imeWithKeyboard }, {
+        }
+        divider(c1)
+        switchRow(c1, "연결 중에도 화면 키보드 표시", "JX-11이 키보드로 인식돼 화면 키보드가 숨겨지는 걸 막아요", { Cfg.imeWithKeyboard }) {
             Cfg.imeWithKeyboard = it
             Cfg.save()
             KeymapService.instance?.applyIme()
-        }))
-        root.addView(sw("볼륨을 키 입력으로 보내기 (이북 페이지 넘김용)", { Cfg.volumeKey }, { Cfg.volumeKey = it }))
-        root.addView(sw("미디어 볼륨만 조절 (켜면 볼륨 키 입력 대신 미디어 볼륨을 직접 조절 → 이북 페이지 넘김은 안 됨)", { Cfg.mediaFixed }, { Cfg.mediaFixed = it; Cfg.save() }))
-        root.addView(sw("볼륨 UI 표시", { Cfg.showUi }, { Cfg.showUi = it }))
-        root.addView(sw("화면 꺼져도 확실히 동작 (배터리 더 사용)", { Cfg.wakeLock }, {
+        }
+        box.addView(c1)
+
+        box.addView(sectionTitle("볼륨"))
+        val c2 = card()
+        switchRow(c2, "볼륨을 키 입력으로 보내기", "이북 앱 페이지 넘김에 필요해요", { Cfg.volumeKey }) { Cfg.volumeKey = it }
+        divider(c2)
+        switchRow(c2, "미디어 볼륨만 조절", "켜면 키 입력 대신 미디어 볼륨을 직접 조절해요 (이북 페이지 넘김은 안 돼요)", { Cfg.mediaFixed }) { Cfg.mediaFixed = it }
+        divider(c2)
+        switchRow(c2, "볼륨 UI 표시", "볼륨이 바뀔 때 화면에 볼륨 바를 보여줘요", { Cfg.showUi }) { Cfg.showUi = it }
+        box.addView(c2)
+
+        box.addView(sectionTitle("시스템"))
+        val c3 = card()
+        switchRow(c3, "화면이 꺼져도 동작", "배터리를 더 사용해요", { Cfg.wakeLock }) {
             Cfg.wakeLock = it
             KeymapService.instance?.applyWake()
-        }))
+        }
+        box.addView(c3)
 
-        // ── 입력 장치 ──
-        root.addView(title("입력 장치"))
-        root.addView(label("장치 이름에 이 글자가 들어 있으면 읽습니다 (비우면 전체)"))
+        box.addView(sectionTitle("입력 장치"))
+        val c4 = card()
+        c4.addView(note("장치 이름에 이 글자가 들어 있으면 읽어요 (비우면 전체)"))
         etFilter = EditText(this).apply {
             setSingleLine()
             setText(Cfg.deviceFilter)
             hint = "예: JX"
         }
-        root.addView(etFilter)
-        root.addView(row(
-            button("적용") { applyFilter() },
-            button("장치 목록") { showDeviceList() }
-        ))
-        root.addView(row(
-            button("볼륨 테스트 ↑↓") {
-                VolumeAction.apply(this, true, 1)
-                h.postDelayed({ VolumeAction.apply(this, false, 1) }, 600)
-            },
-            button("로그 보기") { startActivity(Intent(this, LogActivity::class.java)) }
+        c4.addView(etFilter)
+        box.addView(c4)
+        box.addView(row(
+            pill("적용", 0) { applyFilter() },
+            pill("장치 목록", 1) { showDeviceList() }
         ))
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        box.addView(sectionTitle("도구"))
+        box.addView(pill("로그 보기", 1) { startActivity(Intent(this, LogActivity::class.java)) }, fullWidth())
     }
 
     override fun onResume() {
@@ -214,64 +368,58 @@ class MainActivity : Activity() {
 
     private fun renderTable() {
         tableBox.removeAllViews()
-        val head = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(0xFFE3ECF7.toInt())
+        val mapped = Act.values().filter { Cfg.rulesOf(it).isNotEmpty() }
+        if (mapped.isEmpty()) {
+            tableBox.addView(TextView(this).apply {
+                text = "아직 지정된 입력이 없어요.\n아래 [＋ 기능 추가]를 눌러 시작하세요."
+                textSize = 14f
+                setTextColor(cSub)
+                setPadding(dp(4), dp(14), dp(4), dp(14))
+            })
+            return
         }
-        head.addView(cell("기능", 2.3f, 13f, true))
-        head.addView(cell("키 매핑", 3.3f, 13f, true))
-        head.addView(cell("추가", 0.9f, 13f, true, Gravity.CENTER))
-        head.addView(cell("삭제", 0.9f, 13f, true, Gravity.CENTER))
-        tableBox.addView(head)
-
-        for (act in Act.values()) {
+        mapped.forEachIndexed { i, act ->
             val rules = Cfg.rulesOf(act)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
             }
-            row.addView(cell(act.label, 2.3f, 13f, true))
-            row.addView(cell(
-                if (rules.isEmpty()) "-" else rules.joinToString(", ") { it.label() },
-                3.3f, 12f, false, Gravity.CENTER_VERTICAL, if (rules.isEmpty()) 0xFF999999.toInt() else 0xFF1A237E.toInt()
-            ))
-            row.addView(smallButton("＋", true) { startLearn(act, false) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f))
-            row.addView(smallButton("－", rules.isNotEmpty()) { onMinus(act, rules) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f))
-            tableBox.addView(row)
-            tableBox.addView(View(this).apply {
-                setBackgroundColor(0xFFDDDDDD.toInt())
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(TextView(this).apply {
+                text = act.label
+                textSize = 15f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(cText)
             })
+            for (r in rules) {
+                left.addView(chip(r.label()), LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) })
+            }
+            row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(roundIcon("＋", cAccent) { startLearn(act, false) },
+                LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(8) })
+            row.addView(roundIcon("－", cBad) { onMinus(act, rules) },
+                LinearLayout.LayoutParams(dp(44), dp(44)).apply { leftMargin = dp(8) })
+            tableBox.addView(row)
+            if (i < mapped.size - 1) divider(tableBox)
         }
     }
 
-    private fun cell(
-        t: String, w: Float, size: Float, bold: Boolean,
-        grav: Int = Gravity.CENTER_VERTICAL, color: Int = 0xFF222222.toInt()
-    ): TextView {
-        val tv = TextView(this)
-        tv.text = t
-        tv.textSize = size
-        tv.setTextColor(color)
-        if (bold) tv.setTypeface(tv.typeface, Typeface.BOLD)
-        tv.gravity = grav
-        tv.setPadding(dp(6), dp(10), dp(6), dp(10))
-        tv.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, w)
-        return tv
-    }
-
-    private fun smallButton(t: String, enabled: Boolean, onClick: () -> Unit): Button {
-        val b = Button(this)
-        b.text = t
-        b.textSize = 16f
-        b.minWidth = 0
-        b.minimumWidth = 0
-        b.minHeight = 0
-        b.minimumHeight = dp(40)
-        b.setPadding(0, 0, 0, 0)
-        b.isEnabled = enabled
-        b.setOnClickListener { onClick() }
-        return b
+    /** 아직 입력이 없는 기능 중 하나를 골라 바로 입력 등록으로 */
+    private fun pickActToAdd() {
+        val unmapped = Act.values().filter { Cfg.rulesOf(it).isEmpty() }
+        if (unmapped.isEmpty()) {
+            toast("모든 기능에 입력이 있어요. 목록의 ＋로 더 추가하세요")
+            return
+        }
+        val names = unmapped.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("어떤 기능에 연결할까요?")
+            .setItems(names) { _, which -> startLearn(unmapped[which], false) }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     /** － : 이 기능에 지정된 입력 목록을 체크박스로 보여주고, 체크를 해제한 것을 삭제한다 (키 입력 필요 없음) */
@@ -333,9 +481,21 @@ class MainActivity : Activity() {
         tvAdb.text = "무선 ADB: " + (if (AdbPairingService.running) AdbPairingService.state
             else if (Cfg.adbPort != 0) "서버 정보 저장됨 (포트 ${Cfg.adbPort}) · ${AdbPairingService.state}"
             else "서버 없음 · ${AdbPairingService.state}")
-        tvStatus.text = "상태: ${KeymapService.status}"
+        val st = KeymapService.status
+        tvStatus.text = if (Cfg.enabled) st else "꺼짐 · 오른쪽 스위치로 켜세요"
+        val live = Cfg.enabled && st.startsWith("동작 중")
+        val bad = Cfg.enabled && !live && (st.contains("끊김") || st.contains("없음") || st.contains("실패") || st.contains("안 됨"))
+        (dot.background as? GradientDrawable)?.setColor(
+            if (live) cOk else if (bad) cBad else if (Cfg.enabled) cWarn else cSub
+        )
+        if (Cfg.enabled && !live) {
+            tvHint.text = "연결이 필요해요 → [연결] 탭에서 무선 ADB나 Shizuku를 설정하세요 (눌러서 이동)"
+            tvHint.visibility = View.VISIBLE
+        } else {
+            tvHint.visibility = View.GONE
+        }
         val fires = KeymapService.instance?.engine?.fireCount ?: 0L
-        tvLive.text = "수신 이벤트 ${KeymapService.eventCount} · 동작 실행 $fires\n마지막: ${KeymapService.lastEvent}"
+        tvLive.text = "수신 ${KeymapService.eventCount} · 동작 $fires · 마지막: ${KeymapService.lastEvent}"
         tvDevices.text = "감지 장치: " + (if (KeymapService.devices.isEmpty()) "없음" else KeymapService.devices)
 
         if (renderedVersion != Cfg.mapVersion) {
@@ -345,9 +505,9 @@ class MainActivity : Activity() {
         val a = Learner.act
         if (Learner.active && a != null) {
             tvLearn.text = if (Learner.deleteMode) {
-                "👉 '${a.label}'에서 삭제할 입력을 지금 JX-11에서 하세요… (터치하면 취소)"
+                "👉 '${a.label}'에서 삭제할 입력을 지금 JX-11에서 하세요 (눌러서 취소)"
             } else {
-                "👉 '${a.label}'에 쓸 입력을 지금 JX-11에서 하세요… (터치하면 취소)"
+                "👉 '${a.label}'에 쓸 입력을 지금 JX-11에서 하세요 (눌러서 취소)"
             }
             tvLearn.visibility = View.VISIBLE
         } else {
@@ -534,55 +694,173 @@ class MainActivity : Activity() {
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
-    private fun title(t: String) = TextView(this).apply {
+    private fun rounded(color: Int, radiusDp: Int, stroke: Int? = null): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radiusDp).toFloat()
+            if (stroke != null) setStroke(dp(1), stroke)
+        }
+
+    private fun oval(color: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+
+    private fun card(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(cCard, 14, cLine)
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(10) }
+    }
+
+    private fun divider(parent: LinearLayout) {
+        parent.addView(View(this).apply { setBackgroundColor(cLine) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1))
+    }
+
+    private fun sectionTitle(t: String) = TextView(this).apply {
         text = t
-        textSize = 17f
+        textSize = 13f
         setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(20), 0, dp(6))
+        setTextColor(cSub)
+        setPadding(dp(4), dp(10), 0, dp(6))
     }
 
-    private fun label(t: String) = TextView(this).apply {
+    private fun note(t: String) = TextView(this).apply {
         text = t
-        textSize = 14f
-        setPadding(0, dp(2), 0, dp(2))
+        textSize = 12f
+        setTextColor(cSub)
+        setPadding(dp(4), 0, dp(4), dp(8))
     }
 
-    private fun button(t: String, onClick: () -> Unit) = Button(this).apply {
+    private fun fullWidth() = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { topMargin = dp(6) }
+
+    /** kind: 0=주요(채움), 1=보조(연한 채움), 2=위험(빨간 글씨) */
+    private fun pill(t: String, kind: Int, onClick: () -> Unit): Button {
+        val bg = when (kind) {
+            0 -> cAccent
+            2 -> 0xFFFDECEC.toInt()
+            else -> 0xFFE4E8F0.toInt()
+        }
+        val fg = when (kind) {
+            0 -> 0xFFFFFFFF.toInt()
+            2 -> cBad
+            else -> cText
+        }
+        return Button(this).apply {
+            text = t
+            textSize = 15f
+            setAllCaps(false)
+            setTextColor(fg)
+            stateListAnimator = null
+            minHeight = dp(48)
+            minimumHeight = dp(48)
+            background = RippleDrawable(ColorStateList.valueOf(0x22000000), rounded(bg, 12), null)
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun roundIcon(t: String, color: Int, onClick: () -> Unit): Button = Button(this).apply {
         text = t
+        textSize = 20f
+        setAllCaps(false)
+        setTextColor(color)
+        stateListAnimator = null
+        minWidth = 0
+        minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
+        setPadding(0, 0, 0, 0)
+        background = RippleDrawable(ColorStateList.valueOf(0x22000000), oval(0xFFEEF1F7.toInt()), null)
         setOnClickListener { onClick() }
+    }
+
+    private fun chip(t: String) = TextView(this).apply {
+        text = t
+        textSize = 13f
+        setTextColor(cAccent)
+        background = rounded(0xFFE8EDFF.toInt(), 8)
+        setPadding(dp(10), dp(4), dp(10), dp(4))
     }
 
     private fun row(vararg views: View): LinearLayout {
         val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        for (v in views) {
-            r.addView(v, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        for ((i, v) in views.withIndex()) {
+            r.addView(v, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                topMargin = dp(6)
+                if (i > 0) leftMargin = dp(8)
+            })
         }
         return r
     }
 
-    private fun sw(name: String, get: () -> Boolean, set: (Boolean) -> Unit): Switch {
-        return Switch(this).apply {
+    /** 제목 + 설명 + 오른쪽 스위치 한 줄 */
+    private fun switchRow(parent: LinearLayout, name: String, desc: String, get: () -> Boolean, set: (Boolean) -> Unit) {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(TextView(this).apply {
             text = name
-            textSize = 14f
-            setPadding(0, dp(6), 0, dp(6))
+            textSize = 15f
+            setTextColor(cText)
+        })
+        texts.addView(TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(2), 0, 0)
+        })
+        r.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(10) })
+        r.addView(Switch(this).apply {
             isChecked = get()
             setOnCheckedChangeListener { _, c ->
                 set(c)
                 Cfg.save()
             }
-        }
+        })
+        parent.addView(r)
     }
 
-    private fun slider(name: String, maxP: Int, get: () -> Int, set: (Int) -> Unit, fmt: (Int) -> String): View {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val tv = label("")
+    /** 제목 + 현재값(오른쪽) + 슬라이더 + 설명 */
+    private fun sliderRow(
+        parent: LinearLayout, name: String, desc: String, maxP: Int,
+        get: () -> Int, set: (Int) -> Unit, fmt: (Int) -> String
+    ) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, dp(10))
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(TextView(this).apply {
+            text = name
+            textSize = 15f
+            setTextColor(cText)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val value = TextView(this).apply {
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(cAccent)
+        }
+        head.addView(value)
+        box.addView(head)
         val sb = SeekBar(this)
         sb.max = maxP
         sb.progress = get()
-        tv.text = "$name: ${fmt(sb.progress)}"
+        value.text = fmt(sb.progress)
         sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                tv.text = "$name: ${fmt(p)}"
+                value.text = fmt(p)
                 if (fromUser) {
                     set(p)
                     Cfg.save()
@@ -592,8 +870,12 @@ class MainActivity : Activity() {
             override fun onStartTrackingTouch(s: SeekBar?) {}
             override fun onStopTrackingTouch(s: SeekBar?) {}
         })
-        box.addView(tv)
         box.addView(sb)
-        return box
+        box.addView(TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(cSub)
+        })
+        parent.addView(box)
     }
 }
