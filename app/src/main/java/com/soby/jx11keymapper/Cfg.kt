@@ -250,7 +250,7 @@ object Cfg {
             cooldown = o.optInt("cd", 120),
             steps = o.optInt("steps", 1),
             scroll = o.optInt("scroll", 0).coerceIn(0, 2),
-            gain = o.optInt("gain", 100).coerceIn(10, 1000),
+            gain = o.optInt("gain", 100).coerceIn(10, 9999),
             fling = o.optBoolean("fling", true)
         )
     }

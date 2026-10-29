@@ -161,7 +161,7 @@ class InputService : IInputService.Stub() {
 
     override fun setScroll(mode: Int, gainPct: Int, fling: Boolean, screenW: Int, screenH: Int) {
         val m = mode.coerceIn(0, 2)
-        val g = gainPct.coerceIn(10, 1000)
+        val g = gainPct.coerceIn(10, 9999)
         if (m != sMode || fling != sFling) scroller.cancel("설정 변경")
         sMode = m
         sGain = g

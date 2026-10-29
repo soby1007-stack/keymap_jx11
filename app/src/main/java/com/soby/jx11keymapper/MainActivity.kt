@@ -15,10 +15,12 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.NumberPicker
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
@@ -539,10 +541,9 @@ class MainActivity : Activity() {
             val title = if (e.scroll == 1) "이동 배율" else "칸당 이동량 배율"
             val desc = if (e.scroll == 1) "휠을 굴린 만큼 화면이 움직이는 비율. 100% = 기본 휠 동작과 같은 이동량, 클수록 많이 움직여요."
                 else "휠 한 칸당 스크롤 양의 배율. 100% = 일반 마우스 휠 1칸, 클수록 많이 움직여요."
-            sliderRow(c, title, desc, 19,
-                { ((e.gain / 25) - 1).coerceIn(0, 19) },
-                { v -> Cfg.updateEditing(false) { it.copy(gain = (v + 1) * 25) } },
-                { "${(it + 1) * 25}%" })
+            digitRow(c, title, "$desc (10~9999%)", e.gain) { v ->
+                Cfg.updateEditing(false) { it.copy(gain = v) }
+            }
             if (e.scroll == 1) {
                 divider(c)
                 switchRowRaw(c, "손 뗄 때 관성", "끄면 휠을 멈추는 즉시 화면도 멈춰요. 켜면 굴리던 속도만큼 더 미끄러져요.", e.fling) { on ->
@@ -1299,6 +1300,70 @@ class MainActivity : Activity() {
             }
         })
         parent.addView(r)
+    }
+
+    /** 제목 + 네 자리 숫자 스피너(0000~9999, 단위 %) + 설명. 10 미만은 10으로 보정 */
+    private fun digitRow(parent: LinearLayout, name: String, desc: String, init: Int, set: (Int) -> Unit) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, dp(10))
+        }
+        box.addView(TextView(this).apply {
+            text = name
+            textSize = 15f
+            setTextColor(cText)
+        })
+        val v0 = init.coerceIn(10, 9999)
+        val digits = intArrayOf(v0 / 1000 % 10, v0 / 100 % 10, v0 / 10 % 10, v0 % 10)
+        val pickers = ArrayList<NumberPicker>()
+        val line = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        for (i in 0 until 4) {
+            val np = NumberPicker(this).apply {
+                minValue = 0
+                maxValue = 9
+                value = digits[i]
+                wrapSelectorWheel = true
+                descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            }
+            pickers.add(np)
+            line.addView(np, LinearLayout.LayoutParams(dp(60), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                leftMargin = dp(4)
+                rightMargin = dp(4)
+            })
+        }
+        line.addView(TextView(this).apply {
+            text = "%"
+            textSize = 20f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(cAccent)
+            setPadding(dp(8), 0, 0, 0)
+        })
+        for (np in pickers) {
+            np.setOnValueChangedListener { _, _, _ ->
+                var v = 0
+                for (q in pickers) v = v * 10 + q.value
+                if (v < 10) {
+                    v = 10
+                    pickers[0].value = 0
+                    pickers[1].value = 0
+                    pickers[2].value = 1
+                    pickers[3].value = 0
+                }
+                set(v)
+                Cfg.save()
+            }
+        }
+        box.addView(line)
+        box.addView(TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(0, dp(6), 0, 0)
+        })
+        parent.addView(box)
     }
 
     /** 제목 + 현재값(오른쪽) + 슬라이더 + 설명 */
