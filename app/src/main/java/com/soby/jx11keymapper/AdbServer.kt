@@ -17,9 +17,9 @@ import kotlin.system.exitProcess
  * Shizuku 의 UserService 와 같은 일(InputService)을 하되, Binder 대신 127.0.0.1 소켓으로 앱과 통신한다.
  * 한 번 띄워 두면 Wi-Fi 가 꺼져도 재부팅 전까지 살아 있다.
  *
- * 보안: 127.0.0.1 한정 + 랜덤 토큰 인증 + 허용 명령 9개뿐 (임의 명령 실행 불가)
+ * 보안: 127.0.0.1 한정 + 랜덤 토큰 인증 + 허용 명령 10개뿐 (임의 명령 실행 불가)
  * 프로토콜(탭 구분, 한 줄 한 메시지):
- *   앱→서버  HELLO token ver | START filter grab | STOP | LIST | PING | KEY code | NOTIF | IME 0/1 | USAGE pkg | QUIT
+ *   앱→서버  HELLO token ver | START filter grab | STOP | LIST | PING | KEY code | NOTIF | IME 0/1 | USAGE pkg | SCROLL mode gain fling w h | QUIT
  *   서버→앱  OK ver ping | ERR why | E type code value device | S level stage msg | D summary | R payload | BYE
  */
 object AdbServer {
@@ -109,6 +109,13 @@ object AdbServer {
                     "NOTIF" -> svc.expandNotifications()
                     "IME" -> svc.setImeWithHardKeyboard(p.getOrNull(1) == "1")
                     "USAGE" -> svc.grantUsageAccess(p.getOrElse(1) { "" })
+                    "SCROLL" -> svc.setScroll(
+                        p.getOrElse(1) { "0" }.toIntOrNull() ?: 0,
+                        p.getOrElse(2) { "100" }.toIntOrNull() ?: 100,
+                        p.getOrNull(3) == "1",
+                        p.getOrElse(4) { "0" }.toIntOrNull() ?: 0,
+                        p.getOrElse(5) { "0" }.toIntOrNull() ?: 0
+                    )
                     "QUIT" -> {
                         svc.stop()
                         send("BYE")

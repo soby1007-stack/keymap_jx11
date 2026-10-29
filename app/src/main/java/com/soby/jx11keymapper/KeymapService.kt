@@ -12,6 +12,8 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -120,6 +122,7 @@ class KeymapService : Service() {
                 try { svc.setImeWithHardKeyboard(Cfg.imeWithKeyboard) } catch (t: Throwable) { Diag.w("SVC", "화면 키보드 설정 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
                 grantUsage()
+                pushScroll()
                 via = "Shizuku"
                 setStatus("동작 중 · Shizuku (장치 필터 '${Cfg.deviceFilter}')")
             } catch (t: Throwable) {
@@ -142,6 +145,7 @@ class KeymapService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        Cfg.onScrollChanged = { pushScroll() }
         Diag.i("SVC", "onCreate")
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "키맵퍼 동작 상태", NotificationManager.IMPORTANCE_LOW))
@@ -185,6 +189,7 @@ class KeymapService : Service() {
 
     override fun onDestroy() {
         Diag.i("SVC", "onDestroy")
+        Cfg.onScrollChanged = null
         started = false
         try {
             Shizuku.removeBinderReceivedListener(onBinder)
@@ -286,6 +291,7 @@ class KeymapService : Service() {
                         input = c
                         c.start(Cfg.deviceFilter, callback)
                         grantUsage()
+                        pushScroll()
                         via = "무선 ADB"
                         Diag.i("ADB", "서버 연결됨: ${c.ping()}")
                         setStatus("동작 중 · 무선 ADB (장치 필터 '${Cfg.deviceFilter}')")
@@ -347,6 +353,7 @@ class KeymapService : Service() {
         poller.scheduleWithFixedDelay({
             try {
                 usageOk = ForegroundApp.hasAccess(this)
+                if (Cfg.scrollMode != 0 && screenSize().let { it.x != lastW || it.y != lastH }) pushScroll()   // 화면 회전
                 val linked = Cfg.presets.any { it.apps.isNotEmpty() }
                 if (linked && usageOk) {
                     val before = Cfg.runtimeId
@@ -357,6 +364,49 @@ class KeymapService : Service() {
                 Diag.w("FG", "앞 앱 확인 오류: ${t.message}")
             }
         }, 1000, 1000, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    // ───────── 스크롤 방식(스와이프 배율/마우스 휠) 설정을 셸 프로세스로 전달 ─────────
+
+    @Volatile private var lastW = 0
+    @Volatile private var lastH = 0
+
+    @Suppress("DEPRECATION")
+    private fun screenSize(): Point {
+        val p = Point()
+        try {
+            val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            dm.getDisplay(android.view.Display.DEFAULT_DISPLAY).getRealSize(p)
+        } catch (t: Throwable) {
+            Diag.w("SCROLL", "화면 크기 확인 실패: ${t.message}")
+        }
+        return p
+    }
+
+    /** 적용 프리셋의 스크롤 방식/배율/화면 크기를 셸 서비스에 보낸다 (어느 스레드에서든 호출 가능) */
+    fun pushScroll() {
+        try {
+            io.execute { pushScrollNow() }
+        } catch (t: Throwable) {
+            Diag.w("SCROLL", "전달 큐 거부: ${t.message}")
+        }
+    }
+
+    private fun pushScrollNow() {
+        val svc = input
+        if (svc == null) {
+            Diag.v("SCROLL", "셸 미연결 → 연결되면 다시 전달")
+            return
+        }
+        val sz = screenSize()
+        try {
+            svc.setScroll(Cfg.scrollMode, Cfg.scrollGain, Cfg.scrollFling, sz.x, sz.y)
+            lastW = sz.x
+            lastH = sz.y
+            Diag.d("SCROLL", "전달: mode=${Cfg.scrollMode} gain=${Cfg.scrollGain}% fling=${Cfg.scrollFling} 화면=${sz.x}x${sz.y}")
+        } catch (t: Throwable) {
+            Diag.e("SCROLL", "setScroll 실패 (구버전 서비스? 무선 ADB는 [무선 ADB 연결]로 서버를 새로 띄우세요)", t)
+        }
     }
 
     /** 물리 키보드 연결 중 화면 키보드 표시 설정을 셸 권한으로 적용 */
@@ -379,6 +429,7 @@ class KeymapService : Service() {
                 svc.stop()
                 try { svc.setGrab(Cfg.grab) } catch (t: Throwable) { Diag.w("SVC", "setGrab 실패(구버전 서비스?): ${t.message}") }
                 svc.start(Cfg.deviceFilter, callback)
+                pushScrollNow()
                 Diag.i("SVC", "장치 필터/독점 적용: '${Cfg.deviceFilter}' grab=${Cfg.grab}")
                 main.post { setStatus("동작 중 · $via (장치 필터 '${Cfg.deviceFilter}')") }
             } catch (t: Throwable) {

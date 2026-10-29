@@ -21,4 +21,6 @@ interface IInputService {
     void setImeWithHardKeyboard(boolean show) = 8;
     // 앞 앱 감지(사용 기록 접근)를 셸 권한으로 허용: appops set <pkg> GET_USAGE_STATS allow
     void grantUsageAccess(String pkg) = 9;
+    // 휠(세로 이동) 처리 방식: mode 0=키 변환(앱으로 전달) 1=스와이프(배율) 2=마우스 휠 / gainPct 배율(%) / fling 손 뗄 때 관성 / 화면 크기(px)
+    void setScroll(int mode, int gainPct, boolean fling, int screenW, int screenH) = 10;
 }

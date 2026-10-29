@@ -495,27 +495,70 @@ class MainActivity : Activity() {
         box.addView(fc, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
+        box.addView(sectionTitle("'${e.name}' 스크롤 방식"))
+        box.addView(note("JX-11 휠(세로 이동)을 어떻게 처리할지 프리셋마다 정해요. 웹툰·웹페이지는 스와이프나 마우스 휠, 이북 페이지 넘기기는 키 변환이 잘 맞아요."))
+        val mc = card()
+        val modeNames = arrayOf("키 변환", "스와이프", "마우스 휠")
+        mc.addView(row(
+            *Array(3) { i ->
+                pill(modeNames[i], if (e.scroll == i) 0 else 1) {
+                    if (e.scroll != i) Cfg.updateEditing { it.copy(scroll = i) }
+                }
+            }
+        ))
+        mc.addView(TextView(this).apply {
+            text = when (e.scroll) {
+                1 -> "휠을 굴린 만큼 가상 손가락이 화면을 끌어요. 어떤 앱에서든 동작하고 손 뗄 때 관성도 생겨요. 이 방식에서는 키 지정표의 휠(스와이프 ↑↓) 항목은 쓰이지 않아요. ◁ ▷ 키, 원형 키(탭), 타원 키는 지정한 대로 동작해요."
+                2 -> "휠을 굴린 만큼 마우스 휠 스크롤을 보내요. 브라우저·웹뷰처럼 마우스 휠을 받는 앱에서 부드러워요. 일부 전용 뷰어 앱은 무시할 수 있어요. 키 지정표의 휠(스와이프 ↑↓) 항목은 쓰이지 않아요."
+                else -> "휠을 이만큼 움직일 때마다 키(볼륨·방향키·페이지)를 눌러요. 아래 슬라이더로 반응 간격을 조절해요."
+            }
+            textSize = 12f
+            setTextColor(cSub)
+            setPadding(dp(2), dp(10), dp(2), dp(6))
+        })
+        box.addView(mc)
+
         box.addView(sectionTitle("'${e.name}' 감도"))
         val c = card()
-        sliderRow(c, "이동 감도", "휠을 이만큼 움직일 때마다 동작 1회. 작을수록 민감해요. (휠 한 칸 ≈ 150~180‰)", 29,
-            { ((e.unit / 10) - 1).coerceIn(0, 29) },
-            { v -> Cfg.updateEditing(false) { it.copy(unit = (v + 1) * 10) } },
-            { "${(it + 1) * 10}‰" })
-        divider(c)
-        sliderRow(c, "연속 동작 간격", "연속 동작 사이의 최소 간격. 작을수록 빠르게 반복돼요.", 50,
-            { (e.cooldown / 10).coerceIn(0, 50) },
-            { v -> Cfg.updateEditing(false) { it.copy(cooldown = v * 10) } },
-            { "${it * 10}ms" })
-        divider(c)
-        sliderRow(c, "동작 1회당 반복 횟수", "한 번 동작할 때 볼륨·방향키·페이지 키를 몇 번 누를지", 49,
-            { (e.steps - 1).coerceIn(0, 49) },
-            { v -> Cfg.updateEditing(false) { it.copy(steps = v + 1) } },
-            { "${it + 1}번" })
+        if (e.scroll == 0) {
+            sliderRow(c, "이동 감도", "휠을 이만큼 움직일 때마다 동작 1회. 작을수록 민감해요. (휠 한 칸 ≈ 150~180‰)", 29,
+                { ((e.unit / 10) - 1).coerceIn(0, 29) },
+                { v -> Cfg.updateEditing(false) { it.copy(unit = (v + 1) * 10) } },
+                { "${(it + 1) * 10}‰" })
+            divider(c)
+            sliderRow(c, "연속 동작 간격", "연속 동작 사이의 최소 간격. 작을수록 빠르게 반복돼요.", 50,
+                { (e.cooldown / 10).coerceIn(0, 50) },
+                { v -> Cfg.updateEditing(false) { it.copy(cooldown = v * 10) } },
+                { "${it * 10}ms" })
+            divider(c)
+            sliderRow(c, "동작 1회당 반복 횟수", "한 번 동작할 때 볼륨·방향키·페이지 키를 몇 번 누를지", 49,
+                { (e.steps - 1).coerceIn(0, 49) },
+                { v -> Cfg.updateEditing(false) { it.copy(steps = v + 1) } },
+                { "${it + 1}번" })
+        } else {
+            val title = if (e.scroll == 1) "이동 배율" else "칸당 이동량 배율"
+            val desc = if (e.scroll == 1) "휠을 굴린 만큼 화면이 움직이는 비율. 100% = 기본 휠 동작과 같은 이동량, 클수록 많이 움직여요."
+                else "휠 한 칸당 스크롤 양의 배율. 100% = 일반 마우스 휠 1칸, 클수록 많이 움직여요."
+            sliderRow(c, title, desc, 19,
+                { ((e.gain / 25) - 1).coerceIn(0, 19) },
+                { v -> Cfg.updateEditing(false) { it.copy(gain = (v + 1) * 25) } },
+                { "${(it + 1) * 25}%" })
+            if (e.scroll == 1) {
+                divider(c)
+                switchRowRaw(c, "손 뗄 때 관성", "끄면 휠을 멈추는 즉시 화면도 멈춰요. 켜면 굴리던 속도만큼 더 미끄러져요.", e.fling) { on ->
+                    Cfg.updateEditing(false) { it.copy(fling = on) }
+                }
+            }
+        }
         box.addView(c)
-        box.addView(pill("볼륨 테스트 ↑↓", 1) {
-            VolumeAction.apply(this, true, 1)
-            h.postDelayed({ VolumeAction.apply(this, false, 1) }, 600)
-        }, fullWidth())
+        if (e.scroll == 0) {
+            box.addView(pill("볼륨 테스트 ↑↓", 1) {
+                VolumeAction.apply(this, true, 1)
+                h.postDelayed({ VolumeAction.apply(this, false, 1) }, 600)
+            }, fullWidth())
+        } else {
+            box.addView(note("배율은 바꾸는 즉시 적용돼요. 앞 앱에 연결된 프리셋일 때만 실제로 쓰여요(지금 적용 중인 프리셋은 위 '적용 중' 표시 참고)."))
+        }
     }
 
     private fun deleteEditingPreset() {

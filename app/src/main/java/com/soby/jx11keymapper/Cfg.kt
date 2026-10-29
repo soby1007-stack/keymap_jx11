@@ -17,7 +17,10 @@ data class Preset(
     val fallback: Boolean = false,
     val unit: Int = 100,        // 스와이프가 이만큼(‰) 움직일 때마다 동작 1회
     val cooldown: Int = 120,    // 동작 간 최소 간격(ms)
-    val steps: Int = 1          // 동작 1회당 반복 횟수
+    val steps: Int = 1,         // 동작 1회당 반복 횟수
+    val scroll: Int = 0,        // 휠(세로) 처리 방식: 0=키 변환, 1=스와이프(배율), 2=마우스 휠
+    val gain: Int = 100,        // 스와이프/휠 배율(%) — 100 = 기본 휠 동작과 같은 이동량
+    val fling: Boolean = true   // 스와이프 방식에서 손을 뗄 때 관성(플링) 허용
 ) {
     fun rules(a: Act): List<Rule> = map[a] ?: emptyList()
 }
@@ -56,6 +59,12 @@ object Cfg {
     @Volatile var swipeUnitPermille: Int = 100
     @Volatile var cooldownMs: Int = 120
     @Volatile var stepsPerFire: Int = 1
+    @Volatile var scrollMode: Int = 0
+    @Volatile var scrollGain: Int = 100
+    @Volatile var scrollFling: Boolean = true
+
+    /** 적용 프리셋의 스크롤 방식/배율이 바뀔 때마다 호출 (셸 프로세스로 전달용) */
+    @Volatile var onScrollChanged: (() -> Unit)? = null
 
     // ───────── 프리셋 선택/적용 ─────────
 
@@ -92,6 +101,21 @@ object Cfg {
         swipeUnitPermille = p?.unit ?: 100
         cooldownMs = p?.cooldown ?: 120
         stepsPerFire = p?.steps ?: 1
+        val nm = p?.scroll ?: 0
+        val ng = p?.gain ?: 100
+        val nf = p?.fling ?: true
+        val scrollChanged = nm != scrollMode || ng != scrollGain || nf != scrollFling
+        scrollMode = nm
+        scrollGain = ng
+        scrollFling = nf
+        if (scrollChanged) {
+            Diag.i("PRESET", "스크롤 방식: ${arrayOf("키 변환", "스와이프 배율", "마우스 휠")[nm.coerceIn(0, 2)]} 배율 $ng% 관성 $nf")
+            try {
+                onScrollChanged?.invoke()
+            } catch (t: Throwable) {
+                Diag.w("PRESET", "스크롤 설정 전달 실패: ${t.message}")
+            }
+        }
         if (changed) Diag.i("PRESET", "적용 프리셋: ${p?.name ?: "없음"} (앞 앱 ${if (runtimePkg.isEmpty()) "?" else runtimePkg})")
     }
 
@@ -207,6 +231,9 @@ object Cfg {
         put("unit", p.unit)
         put("cd", p.cooldown)
         put("steps", p.steps)
+        put("scroll", p.scroll)
+        put("gain", p.gain)
+        put("fling", p.fling)
     }
 
     private fun fromJson(o: JSONObject): Preset {
@@ -221,7 +248,10 @@ object Cfg {
             fallback = o.optBoolean("fallback", false),
             unit = o.optInt("unit", 100),
             cooldown = o.optInt("cd", 120),
-            steps = o.optInt("steps", 1)
+            steps = o.optInt("steps", 1),
+            scroll = o.optInt("scroll", 0).coerceIn(0, 2),
+            gain = o.optInt("gain", 100).coerceIn(10, 1000),
+            fling = o.optBoolean("fling", true)
         )
     }
 
@@ -305,7 +335,7 @@ object Cfg {
     }
 
     fun describe(): String =
-        "필터='$deviceFilter' 프리셋=${presets.joinToString { "${it.name}(앱${it.apps.size}${if (it.fallback) ",나머지" else ""},unit=${it.unit},cd=${it.cooldown},steps=${it.steps})" }} " +
+        "필터='$deviceFilter' 프리셋=${presets.joinToString { "${it.name}(앱${it.apps.size}${if (it.fallback) ",나머지" else ""},unit=${it.unit},cd=${it.cooldown},steps=${it.steps},scroll=${it.scroll},gain=${it.gain},fling=${it.fling})" }} " +
             "편집=$editId 적용=$runtimeId idle=${idleResetMs}ms media=$mediaFixed backend=$backend adbPort=$adbPort " +
             "vkey=$volumeKey grab=$grab ui=$showUi wake=$wakeLock enabled=$enabled eink=${einkBlackMs}/${einkWhiteMs}ms x$einkRepeat"
 }

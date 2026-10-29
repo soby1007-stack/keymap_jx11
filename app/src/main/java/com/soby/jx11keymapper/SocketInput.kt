@@ -168,4 +168,7 @@ class SocketInput(
     override fun setImeWithHardKeyboard(show: Boolean) = send("IME\t${if (show) 1 else 0}")
 
     override fun grantUsageAccess(pkg: String) = send("USAGE\t${AdbServer.esc(pkg)}")
+
+    override fun setScroll(mode: Int, gainPct: Int, fling: Boolean, screenW: Int, screenH: Int) =
+        send("SCROLL\t$mode\t$gainPct\t${if (fling) 1 else 0}\t$screenW\t$screenH")
 }
