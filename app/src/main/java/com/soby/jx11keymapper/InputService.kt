@@ -181,6 +181,17 @@ class InputService : IInputService.Stub() {
         private var t0 = 0L
         private var failures = 0
 
+        // 관성(플링) 계산용: JX-11 휠은 칸마다 작은 좌표 점프가 드문드문 오고 손 뗌(BTN_TOUCH 0)은 한참 뒤에 온다.
+        // 그래서 '손 뗌'이 아니라 '휠이 IDLE_MS 동안 멈춤'을 끝으로 보고, 최근 칸들의 속도로 마무리 드래그(속도 있는 UP)를 직접 만든다.
+        private val IDLE_MS = 120L
+        private val samplesT = ArrayList<Long>()
+        private val samplesDy = ArrayList<Float>()
+        private var lastFrameT = 0L
+        private var idleTask: java.util.concurrent.ScheduledFuture<*>? = null
+        private val timer by lazy {
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "jx11-fling").apply { isDaemon = true } }
+        }
+
         /** 세로 이동 1프레임(fy: 범위 대비 비율, 위로 가면 음수)을 주입. 처리했으면 true, 아니면 false(앱으로 전달해야 함) */
         @Synchronized
         fun move(fy: Float): Boolean {
@@ -210,6 +221,8 @@ class InputService : IInputService.Stub() {
                 frames = 0
                 reanchors = 0
                 movedPx = 0f
+                samplesT.clear()
+                samplesDy.clear()
                 t0 = SystemClock.elapsedRealtime()
                 report("D", "SCROLL", "스와이프 시작 배율=${sGain}% 화면=${w}x$h")
             }
@@ -232,6 +245,18 @@ class InputService : IInputService.Stub() {
             py = ny
             frames++
             movedPx += Math.abs(dy)
+            val nowT = SystemClock.uptimeMillis()
+            lastFrameT = nowT
+            samplesT.add(nowT)
+            samplesDy.add(dy)
+            while (samplesT.size > 0 && nowT - samplesT[0] > 300) {
+                samplesT.removeAt(0)
+                samplesDy.removeAt(0)
+            }
+            if (sFling) {
+                idleTask?.cancel(false)
+                idleTask = timer.schedule({ idleEnd() }, IDLE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
             if (frames <= 5) report("V", "SCROLL", "MOVE dy=${"%.1f".format(dy)}px y=${ny.toInt()}")
             return true
         }
@@ -281,6 +306,71 @@ class InputService : IInputService.Stub() {
             }
         }
 
+        /** 최근 칸들의 이동 속도(px/s, 부호 있음). 샘플이 3개 미만이거나 이미 멈춰 있으면 0 */
+        private fun velocity(): Float {
+            val n = samplesT.size
+            if (n < 3) return 0f
+            if (SystemClock.uptimeMillis() - lastFrameT > IDLE_MS + 60) return 0f
+            val span = samplesT[n - 1] - samplesT[0]
+            if (span < 20) return 0f
+            var sum = 0f
+            for (i in 1 until n) sum += samplesDy[i]
+            return (sum / span * 1000f).coerceIn(-12000f, 12000f)
+        }
+
+        /** 스와이프 마무리: 관성 끄면 즉시 멈춤(CANCEL), 켜면 속도가 있을 때 마무리 드래그를 직접 주입해서 플링을 만든다 */
+        private fun finishStroke(reason: String) {
+            idleTask?.cancel(false)
+            down = false
+            val w = if (sW > 0) sW else 1080
+            val h = if (sH > 0) sH else 2340
+            val cx = w / 2f
+            val cy = h / 2f
+            if (!sFling) {
+                touch(MotionEvent.ACTION_CANCEL, cx, py)
+                report("D", "SCROLL", "스와이프 끝($reason): ${frames}프레임 합계 ${movedPx.toInt()}px 재잡기 ${reanchors}회 ${SystemClock.elapsedRealtime() - t0}ms · 관성 꺼짐")
+                frames = 0
+                return
+            }
+            val v = velocity()
+            if (Math.abs(v) < 600f) {
+                touch(MotionEvent.ACTION_UP, cx, py)
+                report("D", "SCROLL", "스와이프 끝($reason): ${frames}프레임 합계 ${movedPx.toInt()}px ${SystemClock.elapsedRealtime() - t0}ms · 관성 없음(v=${v.toInt()}px/s, 샘플 ${samplesT.size})")
+                frames = 0
+                return
+            }
+            // 속도 v 로 짧게 더 끌고(8ms 간격) 손을 뗀다 → 앱의 속도 추적기가 v 를 잡아 플링 시작
+            touch(MotionEvent.ACTION_CANCEL, cx, py)
+            if (!touch(MotionEvent.ACTION_DOWN, cx, cy)) {
+                frames = 0
+                return
+            }
+            val perStep = v * 0.008f
+            val steps = Math.ceil((120f / Math.abs(perStep)).toDouble()).toInt().coerceIn(4, 15)
+            var y = cy
+            for (i in 0 until steps) {
+                Thread.sleep(8)
+                y = (y + perStep).coerceIn(h * 0.05f, h * 0.95f)
+                touch(MotionEvent.ACTION_MOVE, cx, y)
+            }
+            touch(MotionEvent.ACTION_UP, cx, y)
+            report("D", "SCROLL", "스와이프 끝($reason): ${frames}프레임 합계 ${movedPx.toInt()}px ${SystemClock.elapsedRealtime() - t0}ms · 관성 v=${v.toInt()}px/s 샘플 ${samplesT.size} (마무리 ${steps}회)")
+            frames = 0
+        }
+
+        /** 휠이 IDLE_MS 동안 멈춤 → (관성 켠 스와이프에서) 여기서 마무리. 손 뗌(BTN_TOUCH 0)은 한참 뒤에 올 수 있다 */
+        @Synchronized
+        fun idleEnd() {
+            if (!down || sMode != 1 || !sFling) return
+            if (SystemClock.uptimeMillis() - lastFrameT < IDLE_MS - 10) return
+            try {
+                finishStroke("휠 멈춤")
+            } catch (t: Throwable) {
+                down = false
+                report("W", "SCROLL", "스와이프 마무리 실패: ${chain(t)}")
+            }
+        }
+
         /** 손가락(휠)이 떨어짐 */
         @Synchronized
         fun end() {
@@ -291,19 +381,17 @@ class InputService : IInputService.Stub() {
                 frames = 0
                 return
             }
-            down = false
-            val cx = (if (sW > 0) sW else 1080) / 2f
             try {
-                touch(if (sFling) MotionEvent.ACTION_UP else MotionEvent.ACTION_CANCEL, cx, py)
+                finishStroke("손 뗌")
             } catch (t: Throwable) {
+                down = false
                 report("W", "SCROLL", "스와이프 마무리 실패: ${chain(t)}")
             }
-            report("D", "SCROLL", "스와이프 끝 (${frames}프레임, 합계 ${movedPx.toInt()}px, 재잡기 ${reanchors}회, ${SystemClock.elapsedRealtime() - t0}ms, 관성=${sFling})")
-            frames = 0
         }
 
         @Synchronized
         fun cancel(why: String) {
+            idleTask?.cancel(false)
             if (!down) return
             down = false
             val cx = (if (sW > 0) sW else 1080) / 2f
