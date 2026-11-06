@@ -54,6 +54,9 @@ class PairInputActivity : Activity() {
             main.post { current?.finish() }
             PairPipActivity.close()
         }
+
+        /** 입력 창이 열려 있나 */
+        val isOpen: Boolean get() = current != null
     }
 
     private var test = false

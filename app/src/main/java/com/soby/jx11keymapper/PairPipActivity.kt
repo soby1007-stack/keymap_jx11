@@ -44,6 +44,9 @@ class PairPipActivity : Activity() {
         fun close() {
             main.post { current?.finish() }
         }
+
+        /** PiP 안내 창이 떠 있나 (떠 있으면 알림 팝업은 띄우지 않는다) */
+        val isOpen: Boolean get() = current != null
     }
 
     private var test = false
@@ -57,8 +60,8 @@ class PairPipActivity : Activity() {
         Diag.i("PAIRPIP", "PiP 안내 창 시작 (test=$test)")
         val d = resources.displayMetrics.density
         setContentView(TextView(this).apply {
-            text = "눌러서\n코드 입력"
-            textSize = 20f
+            text = "코드가 뜨면\n이 창을 누르고\n[코드 입력]"
+            textSize = 13f
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
             setTextColor(Color.BLACK)

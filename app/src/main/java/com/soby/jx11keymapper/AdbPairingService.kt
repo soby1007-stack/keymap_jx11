@@ -421,7 +421,7 @@ class AdbPairingService : Service() {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setAllowSystemGeneratedContextualActions(false)
-        if (input) b.addAction(codeInputAction())
+        if (input && !uiInputActive()) b.addAction(codeInputAction())
         @Suppress("DEPRECATION")
         b.addAction(0, "취소", stop)
         return b.build()
@@ -444,6 +444,11 @@ class AdbPairingService : Service() {
      */
     private fun alertCodeReady(title: String = "페어링 코드가 떴어요", text: String = "설정 화면의 코드를 입력하세요", portOnly: Boolean = false) {
         showOverlayInput(title, text, portOnly)
+        if (uiInputActive()) {
+            // PiP/입력 창으로 입력하는 중이면 상단 팝업 알림(알림바 입력)은 띄우지 않는다
+            Diag.i("ADB", "입력 창 사용 중 → 팝업 알림 생략: $title")
+            return
+        }
         try {
             val n = Notification.Builder(this, CH_ALERT)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
@@ -462,6 +467,9 @@ class AdbPairingService : Service() {
             Diag.e("ADB", "팝업 알림 실패", t)
         }
     }
+
+    /** PiP 안내 창 또는 코드 입력 창이 떠 있나 */
+    private fun uiInputActive() = PairPipActivity.isOpen || PairInputActivity.isOpen
 
     private fun cancelAlert() {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)
