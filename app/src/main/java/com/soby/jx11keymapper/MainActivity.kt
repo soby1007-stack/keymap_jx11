@@ -728,6 +728,7 @@ class MainActivity : Activity() {
         box.addView(sectionTitle("무선 ADB"))
         box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 상단바 알림의 입력창(알림바가 없는 기기는 화면 위에 뜨는 입력창)에 6자리 코드를 입력하면 끝! 한 번 연결하면 재부팅 전까지 유지돼요."))
         box.addView(pill("무선 ADB 연결(페어링)", 0) { startAdbPairing() }, fullWidth())
+        box.addView(pill("플로팅 입력창 테스트", 1) { testOverlay() }, fullWidth())
         box.addView(pill("플로팅 입력창 권한 (알림바 없는 기기)", 1) {
             getSharedPreferences("jx11_ui", MODE_PRIVATE).edit().putBoolean("overlay_declined", false).apply()
             openOverlaySettings()
@@ -1067,6 +1068,20 @@ class MainActivity : Activity() {
             if (overlayOk) "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 화면 위 입력창에 코드를 입력하세요"
             else "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 상단바 알림에 코드 입력창이 떠요"
         )
+    }
+
+    /** 페어링 없이 플로팅 입력창만 미리 띄워 본다 (권한·표시·키보드 입력 확인용) */
+    private fun testOverlay() {
+        if (!PairOverlay.canShow(this)) {
+            Diag.i("UI", "입력창 테스트: '다른 앱 위에 표시' 권한 없음 → 설정 화면")
+            toast("'다른 앱 위에 표시'를 허용한 뒤 다시 눌러 주세요")
+            openOverlaySettings()
+            return
+        }
+        PairOverlay.show(this, "입력창 테스트", "이 창이 보이고 키보드로 숫자가 입력되면 정상이에요. 6자리를 넣고 [확인]을 눌러 보세요", false) { raw ->
+            Diag.i("UI", "입력창 테스트 입력 수신 · 길이=${raw.length}")
+            runOnUiThread { toast("입력 수신 ✓ (${raw.length}자)") }
+        }
     }
 
     /** '다른 앱 위에 표시' 권한 화면 (플로팅 입력창·E-ink 새로고침용) */

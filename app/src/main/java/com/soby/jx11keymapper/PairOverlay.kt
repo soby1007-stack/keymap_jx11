@@ -51,6 +51,7 @@ object PairOverlay {
      */
     fun show(ctx: Context, title: String, hint: String, portOnly: Boolean, onSubmit: (String) -> Unit) {
         val app = ctx.applicationContext
+        Diag.i("OVERLAY", "표시 요청: $title · 권한=${canShow(app)}")
         main.post {
             try {
                 showOnMain(app, title, hint, portOnly, onSubmit)
