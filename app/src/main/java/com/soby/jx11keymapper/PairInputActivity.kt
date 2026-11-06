@@ -34,7 +34,7 @@ class PairInputActivity : Activity() {
     companion object {
         private val main = Handler(Looper.getMainLooper())
         @Volatile private var current: PairInputActivity? = null
-        private const val EXTRA_TEST = "test"
+        const val EXTRA_TEST = "test"
 
         /** 앱 화면이 앞에 있을 때(버튼 누른 직후) 호출해야 시작이 허용된다 */
         fun open(ctx: Context, test: Boolean = false) {
@@ -52,6 +52,7 @@ class PairInputActivity : Activity() {
 
         fun close() {
             main.post { current?.finish() }
+            PairPipActivity.close()
         }
     }
 

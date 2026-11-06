@@ -726,7 +726,7 @@ class MainActivity : Activity() {
         box.addView(btnBackend, fullWidth())
 
         box.addView(sectionTitle("무선 ADB"))
-        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 화면 위쪽에 뜨는 입력 창(또는 상단바 알림 입력창)에 6자리 코드를 입력하면 끝! 한 번 연결하면 재부팅 전까지 유지돼요."))
+        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 6자리 코드가 뜨면 구석에 떠 있는 작은 창(PiP)을 눌러 [코드 입력]을 누르고 입력하면 끝! (상단바 알림 입력창도 그대로 됩니다) 한 번 연결하면 재부팅 전까지 유지돼요."))
         box.addView(pill("무선 ADB 연결(페어링)", 0) { startAdbPairing() }, fullWidth())
         box.addView(pill("코드 입력 창 테스트", 1) { testPairInput() }, fullWidth())
         box.addView(pill("Shizuku 권한 요청", 1) { requestShizuku() }, fullWidth())
@@ -1055,11 +1055,11 @@ class MainActivity : Activity() {
                 // 이 화면이 아직 앞에 있는 지금, 설정 화면 → 그 위에 입력 창 순서로 연다 (나중에 서비스에서 열면 백그라운드 시작 제한에 걸림)
                 openWirelessDebugging()
                 try {
-                    PairInputActivity.open(this)
+                    PairPipActivity.open(this)
                 } catch (t: Throwable) {
-                    Diag.e("UI", "입력 창 열기 실패", t)
+                    Diag.e("UI", "PiP 안내 창 열기 실패", t)
                 }
-                toast("무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누른 뒤, 위쪽 입력 창에 코드를 입력하세요")
+                toast("'페어링 코드로 기기 페어링'을 눌러 코드가 뜨면, 구석의 작은 창을 눌러 [코드 입력]을 누르세요")
             }
         }.start()
     }
@@ -1067,7 +1067,7 @@ class MainActivity : Activity() {
     /** 페어링 없이 입력 창만 띄워 본다 (설정 화면 위 표시·키보드 입력 확인용) */
     private fun testPairInput() {
         try {
-            PairInputActivity.open(this, test = true)
+            PairPipActivity.open(this, test = true)
         } catch (t: Throwable) {
             Diag.e("UI", "입력창 테스트 열기 실패", t)
             toast("열기 실패: ${t.message}")

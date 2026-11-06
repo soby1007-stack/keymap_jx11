@@ -51,12 +51,24 @@
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
         <!-- 페어링 코드 입력 창: 설정 화면 위에 뜨는 작은 창 (오버레이는 설정이 숨기므로 일반 액티비티) -->
+        <!-- 페어링 안내용 PiP(구석의 작은 창): 설정 화면 터치를 막지 않고, 눌러서 코드 입력 창을 연다 -->
+        <activity
+            android:name=".PairPipActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.soby.jx11keymapper.pip"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
+
         <activity
             android:name=".PairInputActivity"
             android:exported="false"
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
-            android:taskAffinity=""
+            android:taskAffinity="com.soby.jx11keymapper.input"
             android:windowSoftInputMode="adjustPan|stateVisible"
             android:theme="@android:style/Theme.DeviceDefault.Light.Dialog.NoActionBar" />
 
