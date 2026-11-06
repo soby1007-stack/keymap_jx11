@@ -142,6 +142,7 @@ class AdbPairingService : Service() {
         const val ACTION_START = "com.soby.jx11keymapper.ADB_START"
         const val ACTION_STOP = "com.soby.jx11keymapper.ADB_STOP"
         const val ACTION_CODE = "com.soby.jx11keymapper.ADB_CODE"
+        const val EXTRA_RAW = "raw"          // 입력 창(PairInputActivity)에서 보내는 입력 문자열
         private const val KEY_CODE = "code"
         private const val CH_STATUS = "adb_status_v2"       // 채널 중요도는 만든 뒤 못 바꿈 → ID에 버전
         private const val CH_ALERT = "adb_pairing_alert_v1"
@@ -179,15 +180,21 @@ class AdbPairingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                PairOverlay.hide()
+                PairInputActivity.close()
                 synchronized(genLock) { flowGen++ }
                 running = false
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_CODE -> {
-                val code = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_CODE)?.toString()?.trim()
-                Diag.i("ADB", "알림에서 입력 수신 · 길이=${code?.length ?: -1}")
+                val fromNotif = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_CODE)?.toString()?.trim()
+                val code = fromNotif ?: intent?.getStringExtra(EXTRA_RAW)?.trim()
+                Diag.i("ADB", "${if (fromNotif != null) "알림" else "입력 창"}에서 입력 수신 · 길이=${code?.length ?: -1}")
+                if (!running) {
+                    Diag.w("ADB", "연결 흐름이 끝난 뒤의 입력 → 무시")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 if (!code.isNullOrEmpty()) {
                     cancelAlert()
                     codes.offer(code)
@@ -209,7 +216,6 @@ class AdbPairingService : Service() {
         alertedPort = -1
         codes.clear()
         cancelAlert()
-        PairOverlay.hide()
         goForeground("시작 중…")
         disc?.stop()
         disc = AdbDiscovery(this) { ep -> onPairingEndpoint(gen, ep) }.also { it.start() }
@@ -224,7 +230,7 @@ class AdbPairingService : Service() {
                     disc?.stop()
                     running = false
                     if (!ok) cancelAlert()
-                    PairOverlay.hide()
+                    PairInputActivity.close()
                     stopSelf()
                 }
             }
@@ -232,7 +238,7 @@ class AdbPairingService : Service() {
     }
 
     override fun onDestroy() {
-        PairOverlay.hide()
+        PairInputActivity.close()
         synchronized(genLock) { flowGen++ }
         disc?.stop()
         super.onDestroy()
@@ -286,12 +292,8 @@ class AdbPairingService : Service() {
         if (!alive(gen)) return
 
         // 3) 페어링: 상태 알림에 처음부터 [코드 입력] 이 달려 있음. 포트를 못 찾으면 '포트 코드' 로도 입력 가능
-        if (PairOverlay.canShow(this)) {
-            setState("'페어링 코드로 기기 페어링'을 누르고, 화면에 떠 있는 입력창에 6자리 코드를 입력하세요")
-            showOverlayInput("페어링 코드 입력", "설정의 '페어링 코드로 기기 페어링' 창을 열어 둔 채, 거기 보이는 6자리 코드를 입력하세요")
-        } else {
-            setState("'페어링 코드로 기기 페어링'을 누르고, 알림의 [코드 입력]에 6자리 코드를 입력하세요")
-        }
+        setState("'페어링 코드로 기기 페어링'을 누르고, 화면 위 입력 창(또는 알림)에 6자리 코드를 입력하세요")
+        showOverlayInput("페어링 코드 입력", "설정의 '페어링 코드로 기기 페어링'을 눌러 6자리 코드를 띄운 뒤, 그 코드를 여기에 입력하세요")
         val end = System.currentTimeMillis() + 5 * 60_000L
         while (System.currentTimeMillis() < end && alive(gen)) {
             val raw = codes.poll(1, TimeUnit.SECONDS) ?: continue
@@ -362,7 +364,7 @@ class AdbPairingService : Service() {
 
     private fun done(msg: String) {
         ok = true
-        PairOverlay.hide()
+        PairInputActivity.close()
         setState(msg, input = false)
         Diag.i("ADB", msg)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -465,20 +467,8 @@ class AdbPairingService : Service() {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)
     }
 
-    /**
-     * 화면 위 플로팅 입력창 (알림바를 못 쓰는 기기용). '다른 앱 위에 표시' 권한이 없으면 아무것도 안 하고 알림 입력만 쓴다.
-     * 제출하면 알림 입력과 똑같이 codes 큐로 들어간다.
-     */
+    /** 입력 창(PairInputActivity)이 열려 있으면 문구를 바꾸고 다시 입력받는다. 닫혀 있으면 알림 입력만 쓴다 */
     private fun showOverlayInput(title: String, hint: String, portOnly: Boolean = false) {
-        if (!PairOverlay.canShow(this)) {
-            Diag.i("ADB", "플로팅 입력창 권한 없음 → 알림 입력만 사용")
-            return
-        }
-        PairOverlay.show(applicationContext, title, hint, portOnly) { raw ->
-            Diag.i("ADB", "플로팅 입력창에서 입력 수신 · 길이=${raw.length}")
-            cancelAlert()
-            codes.offer(raw)
-            setState("입력 확인 중…")
-        }
+        PairInputActivity.update(title, hint, portOnly)
     }
 }

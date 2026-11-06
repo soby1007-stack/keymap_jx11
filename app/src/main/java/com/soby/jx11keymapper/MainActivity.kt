@@ -726,13 +726,9 @@ class MainActivity : Activity() {
         box.addView(btnBackend, fullWidth())
 
         box.addView(sectionTitle("무선 ADB"))
-        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 상단바 알림의 입력창(알림바가 없는 기기는 화면 위에 뜨는 입력창)에 6자리 코드를 입력하면 끝! 한 번 연결하면 재부팅 전까지 유지돼요."))
+        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 화면 위쪽에 뜨는 입력 창(또는 상단바 알림 입력창)에 6자리 코드를 입력하면 끝! 한 번 연결하면 재부팅 전까지 유지돼요."))
         box.addView(pill("무선 ADB 연결(페어링)", 0) { startAdbPairing() }, fullWidth())
-        box.addView(pill("플로팅 입력창 테스트", 1) { testOverlay() }, fullWidth())
-        box.addView(pill("플로팅 입력창 권한 (알림바 없는 기기)", 1) {
-            getSharedPreferences("jx11_ui", MODE_PRIVATE).edit().putBoolean("overlay_declined", false).apply()
-            openOverlaySettings()
-        }, fullWidth())
+        box.addView(pill("코드 입력 창 테스트", 1) { testPairInput() }, fullWidth())
         box.addView(pill("Shizuku 권한 요청", 1) { requestShizuku() }, fullWidth())
         box.addView(pill("ADB 서버 종료", 2) { killAdb() }, fullWidth())
     }
@@ -1025,74 +1021,56 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 버튼 한 번: (필요하면) 권한 확인 → 무선 디버깅 화면 열기 + 연결 마법사 시작.
-     * 코드 입력은 상단바 알림 또는 화면 위 플로팅 입력창('다른 앱 위에 표시' 권한) — 알림바가 없는 전자책 리더 등은 후자.
+     * 버튼 한 번: 서버가 이미 떠 있는지 확인 → 없으면 무선 디버깅 화면 + 그 위에 뜨는 코드 입력 창(PairInputActivity).
+     * 입력 창은 오버레이가 아니라 일반 액티비티라 설정 화면이 숨기지 못하고, 상단바 알림이 없는 기기에서도 쓸 수 있다.
+     * 알림 입력도 그대로 병행된다.
      */
     private fun startAdbPairing(skipNotifCheck: Boolean = false) {
-        val overlayOk = PairOverlay.canShow(this)
-        if (!skipNotifCheck && !overlayOk && Build.VERSION.SDK_INT >= 33 &&
+        if (!skipNotifCheck && Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             Diag.i("UI", "알림 권한 요청 (무선 ADB 용)")
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
             return
         }
-        val prefs = getSharedPreferences("jx11_ui", MODE_PRIVATE)
-        if (!overlayOk && !prefs.getBoolean("overlay_declined", false)) {
-            Diag.i("UI", "플로팅 입력창 권한 안내")
-            AlertDialog.Builder(this)
-                .setTitle("플로팅 입력창")
-                .setMessage("상단 알림바가 안 뜨는 기기(전자책 리더 등)에서도 페어링 코드를 입력할 수 있게, 화면 위에 작은 입력창을 띄워요.\n\n'다른 앱 위에 표시'를 허용한 뒤 [무선 ADB 연결]을 다시 눌러 주세요.")
-                .setPositiveButton("허용 설정 열기") { _, _ -> openOverlaySettings() }
-                .setNegativeButton("알림으로만 진행") { _, _ ->
-                    prefs.edit().putBoolean("overlay_declined", true).apply()
-                    startAdbPairing(skipNotifCheck)
+        Diag.i("UI", "무선 ADB 연결 버튼 · 서버 확인 중")
+        Thread {
+            val r = try {
+                AdbBridge.probe()
+            } catch (t: Throwable) {
+                null
+            }
+            runOnUiThread {
+                try {
+                    AdbPairingService.start(this)
+                } catch (t: Throwable) {
+                    Diag.e("UI", "무선 ADB 마법사 시작 실패", t)
+                    toast("시작 실패: ${t.message}")
+                    return@runOnUiThread
                 }
-                .show()
-            return
-        }
-        launchAdbPairing(overlayOk)
+                if (r == SocketInput.Result.OK) {
+                    toast("이미 서버가 실행 중이에요")
+                    return@runOnUiThread
+                }
+                // 이 화면이 아직 앞에 있는 지금, 설정 화면 → 그 위에 입력 창 순서로 연다 (나중에 서비스에서 열면 백그라운드 시작 제한에 걸림)
+                openWirelessDebugging()
+                try {
+                    PairInputActivity.open(this)
+                } catch (t: Throwable) {
+                    Diag.e("UI", "입력 창 열기 실패", t)
+                }
+                toast("무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누른 뒤, 위쪽 입력 창에 코드를 입력하세요")
+            }
+        }.start()
     }
 
-    private fun launchAdbPairing(overlayOk: Boolean) {
-        Diag.i("UI", "무선 ADB 연결 버튼 · 무선 디버깅 설정 열기 + 서비스 시작 (플로팅 입력창=${overlayOk})")
+    /** 페어링 없이 입력 창만 띄워 본다 (설정 화면 위 표시·키보드 입력 확인용) */
+    private fun testPairInput() {
         try {
-            AdbPairingService.start(this)
+            PairInputActivity.open(this, test = true)
         } catch (t: Throwable) {
-            Diag.e("UI", "무선 ADB 마법사 시작 실패", t)
-            toast("시작 실패: ${t.message}")
-            return
-        }
-        openWirelessDebugging()
-        toast(
-            if (overlayOk) "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 화면 위 입력창에 코드를 입력하세요"
-            else "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 상단바 알림에 코드 입력창이 떠요"
-        )
-    }
-
-    /** 페어링 없이 플로팅 입력창만 미리 띄워 본다 (권한·표시·키보드 입력 확인용) */
-    private fun testOverlay() {
-        if (!PairOverlay.canShow(this)) {
-            Diag.i("UI", "입력창 테스트: '다른 앱 위에 표시' 권한 없음 → 설정 화면")
-            toast("'다른 앱 위에 표시'를 허용한 뒤 다시 눌러 주세요")
-            openOverlaySettings()
-            return
-        }
-        PairOverlay.show(this, "입력창 테스트", "이 창이 보이고 키보드로 숫자가 입력되면 정상이에요. 6자리를 넣고 [확인]을 눌러 보세요", false) { raw ->
-            Diag.i("UI", "입력창 테스트 입력 수신 · 길이=${raw.length}")
-            runOnUiThread { toast("입력 수신 ✓ (${raw.length}자)") }
-        }
-    }
-
-    /** '다른 앱 위에 표시' 권한 화면 (플로팅 입력창·E-ink 새로고침용) */
-    private fun openOverlaySettings() {
-        try {
-            startActivity(
-                Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
-        } catch (t: Throwable) {
-            Diag.e("UI", "'다른 앱 위에 표시' 설정 화면 열기 실패", t)
-            toast("설정 화면을 열 수 없어요. 설정 > 앱 > JX-11 키맵퍼 > 다른 앱 위에 표시 에서 허용해 주세요")
+            Diag.e("UI", "입력창 테스트 열기 실패", t)
+            toast("열기 실패: ${t.message}")
         }
     }
 
@@ -1101,7 +1079,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
         Diag.i("UI", "권한 요청 결과 code=$requestCode 허용=$ok")
-        if (requestCode == 7001) startAdbPairing(skipNotifCheck = true)   // 알림 권한을 거절해도 플로팅 입력창으로 진행 가능
+        if (requestCode == 7001) startAdbPairing(skipNotifCheck = true)   // 알림 권한을 거절해도 입력 창으로 진행 가능
     }
 
     /** 개발자 옵션을 열고 '무선 디버깅' 항목으로 바로 스크롤·강조 (Shizuku 와 같은 방식). 실패하면 개발자 옵션만 연다 */

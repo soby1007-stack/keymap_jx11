@@ -50,6 +50,16 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
+        <!-- 페어링 코드 입력 창: 설정 화면 위에 뜨는 작은 창 (오버레이는 설정이 숨기므로 일반 액티비티) -->
+        <activity
+            android:name=".PairInputActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustPan|stateVisible"
+            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog.NoActionBar" />
+
         <activity
             android:name=".LogActivity"
             android:exported="false" />
