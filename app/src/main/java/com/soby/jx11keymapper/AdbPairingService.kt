@@ -179,6 +179,7 @@ class AdbPairingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                PairOverlay.hide()
                 synchronized(genLock) { flowGen++ }
                 running = false
                 stopSelf()
@@ -208,6 +209,7 @@ class AdbPairingService : Service() {
         alertedPort = -1
         codes.clear()
         cancelAlert()
+        PairOverlay.hide()
         goForeground("시작 중…")
         disc?.stop()
         disc = AdbDiscovery(this) { ep -> onPairingEndpoint(gen, ep) }.also { it.start() }
@@ -222,6 +224,7 @@ class AdbPairingService : Service() {
                     disc?.stop()
                     running = false
                     if (!ok) cancelAlert()
+                    PairOverlay.hide()
                     stopSelf()
                 }
             }
@@ -229,6 +232,7 @@ class AdbPairingService : Service() {
     }
 
     override fun onDestroy() {
+        PairOverlay.hide()
         synchronized(genLock) { flowGen++ }
         disc?.stop()
         super.onDestroy()
@@ -282,7 +286,12 @@ class AdbPairingService : Service() {
         if (!alive(gen)) return
 
         // 3) 페어링: 상태 알림에 처음부터 [코드 입력] 이 달려 있음. 포트를 못 찾으면 '포트 코드' 로도 입력 가능
-        setState("'페어링 코드로 기기 페어링'을 누르고, 알림의 [코드 입력]에 6자리 코드를 입력하세요")
+        if (PairOverlay.canShow(this)) {
+            setState("'페어링 코드로 기기 페어링'을 누르고, 화면에 떠 있는 입력창에 6자리 코드를 입력하세요")
+            showOverlayInput("페어링 코드 입력", "설정의 '페어링 코드로 기기 페어링' 창을 열어 둔 채, 거기 보이는 6자리 코드를 입력하세요")
+        } else {
+            setState("'페어링 코드로 기기 페어링'을 누르고, 알림의 [코드 입력]에 6자리 코드를 입력하세요")
+        }
         val end = System.currentTimeMillis() + 5 * 60_000L
         while (System.currentTimeMillis() < end && alive(gen)) {
             val raw = codes.poll(1, TimeUnit.SECONDS) ?: continue
@@ -315,7 +324,7 @@ class AdbPairingService : Service() {
                 cport = disc!!.connect!!.port
             } else {
                 setState("페어링 완료! 무선 디버깅 화면 위쪽 'IP 주소 및 포트'의 포트(5자리)를 입력하세요")
-                alertCodeReady("연결 포트가 필요해요", "무선 디버깅 화면의 포트(5자리)를 입력하세요")
+                alertCodeReady("연결 포트가 필요해요", "무선 디버깅 화면 위쪽 'IP 주소 및 포트'의 포트(5자리)를 입력하세요", portOnly = true)
                 val e2 = System.currentTimeMillis() + 120_000L
                 while (System.currentTimeMillis() < e2 && alive(gen) && cport == null) {
                     val ce = disc?.connect
@@ -353,6 +362,7 @@ class AdbPairingService : Service() {
 
     private fun done(msg: String) {
         ok = true
+        PairOverlay.hide()
         setState(msg, input = false)
         Diag.i("ADB", msg)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -430,7 +440,8 @@ class AdbPairingService : Service() {
      * 헤드업에서 바로 [코드 입력]을 누르면 알림창 전체를 내리지 않아 코드가 덜 가려진다.
      * 문구에 숫자를 넣지 않는다 (삼성이 '복사' 버튼을 붙임).
      */
-    private fun alertCodeReady(title: String = "페어링 코드가 떴어요", text: String = "설정 화면의 코드를 입력하세요") {
+    private fun alertCodeReady(title: String = "페어링 코드가 떴어요", text: String = "설정 화면의 코드를 입력하세요", portOnly: Boolean = false) {
+        showOverlayInput(title, text, portOnly)
         try {
             val n = Notification.Builder(this, CH_ALERT)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
@@ -452,5 +463,22 @@ class AdbPairingService : Service() {
 
     private fun cancelAlert() {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)
+    }
+
+    /**
+     * 화면 위 플로팅 입력창 (알림바를 못 쓰는 기기용). '다른 앱 위에 표시' 권한이 없으면 아무것도 안 하고 알림 입력만 쓴다.
+     * 제출하면 알림 입력과 똑같이 codes 큐로 들어간다.
+     */
+    private fun showOverlayInput(title: String, hint: String, portOnly: Boolean = false) {
+        if (!PairOverlay.canShow(this)) {
+            Diag.i("ADB", "플로팅 입력창 권한 없음 → 알림 입력만 사용")
+            return
+        }
+        PairOverlay.show(applicationContext, title, hint, portOnly) { raw ->
+            Diag.i("ADB", "플로팅 입력창에서 입력 수신 · 길이=${raw.length}")
+            cancelAlert()
+            codes.offer(raw)
+            setState("입력 확인 중…")
+        }
     }
 }
