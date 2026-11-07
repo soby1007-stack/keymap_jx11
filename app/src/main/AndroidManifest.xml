@@ -91,6 +91,20 @@
                 android:value="Maps scroll input of a paired Bluetooth remote to volume changes" />
         </service>
 
+        <!-- 페어링 코드 자동 입력: 설정 앱의 코드 창에서 6자리를 읽기만 함 -->
+        <service
+            android:name=".PairAccessibilityService"
+            android:exported="true"
+            android:label="JX-11 키맵퍼 자동 입력"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/pair_accessibility" />
+        </service>
+
         <service
             android:name=".AdbPairingService"
             android:exported="false"

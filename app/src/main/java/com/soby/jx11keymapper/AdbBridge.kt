@@ -4,6 +4,7 @@ import android.content.Context
 import com.flyfishxu.kadb.Kadb
 import com.flyfishxu.kadb.cert.KadbCert
 import kotlinx.coroutines.runBlocking
+import rikka.shizuku.Shizuku
 import java.io.File
 import java.security.SecureRandom
 
@@ -146,5 +147,94 @@ object AdbBridge {
             }
         }
         return lastErr
+    }
+
+    /** Shizuku 셸(uid 2000)로 단계 명령 하나를 실행하고 (종료코드, 출력) 반환. newProcess 는 Shizuku API 에서 private 이라 리플렉션 */
+    private fun shizukuShell(cmd: String): Pair<Int, String> {
+        val m = Shizuku::class.java.getDeclaredMethod(
+            "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
+        )
+        m.isAccessible = true
+        val p = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
+        val out = p.inputStream.bufferedReader().readText()
+        val code = p.waitFor()
+        return Pair(code, out.trim())
+    }
+
+    /**
+     * Shizuku 의 UserService 가 안 붙는 기기용 대안: Shizuku 셸 권한으로 무선 ADB 와 똑같은 서버(AdbServer)를 직접 띄운다.
+     * 이후 앱은 평소처럼 로컬 소켓으로 접속한다. 성공하면 null, 실패하면 원인 문자열. 백그라운드 스레드에서 호출.
+     */
+    fun launchServerViaShizuku(ctx: Context): String? {
+        ensurePortToken()
+        when (probe()) {
+            SocketInput.Result.OK -> {
+                Diag.i("SHIZUKU", "최신 서버가 이미 실행 중 → 그대로 사용")
+                return null
+            }
+            SocketInput.Result.OLD_VERSION -> {
+                try {
+                    quitServer()
+                    Thread.sleep(400)
+                } catch (t: Throwable) {
+                    Diag.w("SHIZUKU", "구버전 서버 종료 실패(무시): ${Diag.chain(t)}")
+                }
+            }
+            else -> {}
+        }
+        val apk = ctx.packageCodePath
+        for (attempt in 1..2) {
+            val cmd = "JX11_TOKEN=${Cfg.adbToken} CLASSPATH=$apk setsid nohup app_process /system/bin " +
+                "--nice-name=jx11server com.soby.jx11keymapper.AdbServer ${Cfg.adbPort} " +
+                "> $SERVER_LOG 2>&1 < /dev/null & sleep 1; echo started"
+            Diag.i("SHIZUKU", "Shizuku 셸로 서버 기동 시도 #$attempt → 서버 포트 ${Cfg.adbPort}")
+            try {
+                val id = shizukuShell("id")
+                Diag.i("SHIZUKU", "Shizuku 셸 OK · ${id.second}")
+                val r = shizukuShell(cmd)
+                Diag.d("SHIZUKU", "기동 명령 exit=${r.first} out='${r.second}'")
+                val deadline = System.currentTimeMillis() + 8000
+                while (System.currentTimeMillis() < deadline) {
+                    if (probe() == SocketInput.Result.OK) {
+                        Diag.i("SHIZUKU", "서버 기동 확인됨")
+                        return null
+                    }
+                    Thread.sleep(300)
+                }
+                val tail = try {
+                    shizukuShell("tail -n 20 $SERVER_LOG").second
+                } catch (t: Throwable) {
+                    "(로그 읽기 실패: ${t.message})"
+                }
+                val err = "서버가 8초 안에 열리지 않음. 서버 로그: ${tail.ifEmpty { "(비어 있음)" }}"
+                Diag.e("SHIZUKU", err)
+                if (tail.contains("Address already in use", ignoreCase = true) || tail.contains("EADDRINUSE")) {
+                    Cfg.adbPort = 38461 + SecureRandom().nextInt(3000)
+                    Cfg.save()
+                } else {
+                    return err
+                }
+            } catch (t: Throwable) {
+                Diag.e("SHIZUKU", "Shizuku 셸 실행 실패", t)
+                return "Shizuku 셸 실행 실패: ${Diag.chain(t)}"
+            }
+        }
+        return "서버 기동 실패"
+    }
+
+    /**
+     * PC 의 USB adb(셸 권한) 한 줄로 서버를 띄우는 스크립트 내용. 무선 디버깅/페어링/알림이 필요 없다.
+     * 앱을 다시 설치·업데이트하면 앱 경로(CLASSPATH)가 바뀌므로 그때마다 다시 만들어 실행해야 한다.
+     */
+    fun serverStartScript(ctx: Context): String {
+        ensurePortToken()
+        val apk = ctx.packageCodePath
+        return "#!/system/bin/sh\n" +
+            "# JX-11 키맵퍼 서버 시작 (재부팅하거나 앱을 업데이트하면 다시 실행)\n" +
+            "JX11_TOKEN=${Cfg.adbToken} CLASSPATH=$apk setsid nohup app_process /system/bin " +
+            "--nice-name=jx11server com.soby.jx11keymapper.AdbServer ${Cfg.adbPort} " +
+            "> $SERVER_LOG 2>&1 < /dev/null &\n" +
+            "sleep 1\n" +
+            "echo started\n"
     }
 }

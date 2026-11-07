@@ -152,6 +152,18 @@ class AdbPairingService : Service() {
         @Volatile var state: String = "대기 안 함"
         @Volatile var running = false
 
+        // 접근성 서비스(PairAccessibilityService)가 화면에서 읽은 코드를 받기 위한 창구
+        @Volatile private var instance: AdbPairingService? = null
+        @Volatile var wantCode = false
+        @Volatile var wantPort = false
+
+        /** 연결 마법사가 코드/포트를 기다리는 중이면 접근성이 화면을 읽을 필요가 있다 */
+        fun wantsScreenRead() = running && (wantCode || wantPort)
+
+        fun offerFromScreen(raw: String, isPort: Boolean) {
+            instance?.onScreenInput(raw, isPort)
+        }
+
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, AdbPairingService::class.java).setAction(ACTION_START))
         }
@@ -159,6 +171,25 @@ class AdbPairingService : Service() {
 
     private var disc: AdbDiscovery? = null
     private val codes = LinkedBlockingQueue<String>()
+    private var lastScreen: String? = null
+    private var autoTries = 0
+
+    /** 접근성이 설정 화면에서 읽은 값: "코드" 또는 "포트 코드"(페어링), 포트만(연결 포트) */
+    private fun onScreenInput(raw: String, isPort: Boolean) {
+        if (!running) return
+        if (isPort && !wantPort) return
+        if (!isPort && !wantCode) return
+        if (raw == lastScreen) return
+        if (!isPort && autoTries >= 4) {
+            Diag.w("ADB", "화면에서 읽은 코드로 4번 시도했지만 실패 → 더 이상 자동 입력하지 않음 ([무선 ADB 연결]을 다시 누르세요)")
+            return
+        }
+        lastScreen = raw
+        if (!isPort) autoTries++
+        Diag.i("ADB", "화면(접근성)에서 ${if (isPort) "연결 포트" else "페어링 코드"} 읽음 · 길이=${raw.length}")
+        setState(if (isPort) "화면에서 연결 포트를 읽었어요…" else "화면에서 코드를 읽었어요 · 페어링 중…")
+        codes.offer(raw)
+    }
     private val genLock = Any()
     @Volatile private var flowGen = 0
     @Volatile private var ok = false
@@ -168,6 +199,7 @@ class AdbPairingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CH_STATUS, "무선 ADB 연결 상태", NotificationManager.IMPORTANCE_LOW))
         nm.createNotificationChannel(NotificationChannel(CH_ALERT, "무선 ADB 페어링 코드 알림", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -215,6 +247,10 @@ class AdbPairingService : Service() {
         ok = false
         alertedPort = -1
         codes.clear()
+        lastScreen = null
+        autoTries = 0
+        wantCode = false
+        wantPort = false
         cancelAlert()
         goForeground("시작 중…")
         disc?.stop()
@@ -229,6 +265,8 @@ class AdbPairingService : Service() {
                 if (gen == flowGen) {
                     disc?.stop()
                     running = false
+                    wantCode = false
+                    wantPort = false
                     if (!ok) cancelAlert()
                     PairInputActivity.close()
                     stopSelf()
@@ -238,6 +276,9 @@ class AdbPairingService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
+        wantCode = false
+        wantPort = false
         PairInputActivity.close()
         synchronized(genLock) { flowGen++ }
         disc?.stop()
@@ -292,7 +333,12 @@ class AdbPairingService : Service() {
         if (!alive(gen)) return
 
         // 3) 페어링: 상태 알림에 처음부터 [코드 입력] 이 달려 있음. 포트를 못 찾으면 '포트 코드' 로도 입력 가능
-        setState("'페어링 코드로 기기 페어링'을 누르고, 화면 위 입력 창(또는 알림)에 6자리 코드를 입력하세요")
+        wantCode = true
+        if (PairAccessibilityService.connected) {
+            setState("설정에서 '페어링 코드로 기기 페어링'을 누르면 코드를 자동으로 읽어 페어링합니다")
+        } else {
+            setState("'페어링 코드로 기기 페어링'을 누르고, 화면 위 입력 창(또는 알림)에 6자리 코드를 입력하세요")
+        }
         showOverlayInput("페어링 코드 입력", "설정의 '페어링 코드로 기기 페어링'을 눌러 6자리 코드를 띄운 뒤, 그 코드를 여기에 입력하세요")
         val end = System.currentTimeMillis() + 5 * 60_000L
         while (System.currentTimeMillis() < end && alive(gen)) {
@@ -315,17 +361,20 @@ class AdbPairingService : Service() {
                 AdbBridge.pair(this, "127.0.0.1", port, parsed.second)
             } catch (t: Throwable) {
                 Diag.e("ADB", "페어링 실패", t)
+                lastScreen = null
                 alertedPort = -1
                 setState("페어링 실패 · 코드를 다시 입력하세요")
                 alertCodeReady("페어링 실패", "코드를 다시 확인하고 입력하세요")
                 continue
             }
+            wantCode = false
             setState("페어링 성공 · 연결 포트 검색 중…")
             var cport: Int? = null
             if (waitFor(gen, 15000) { disc?.connect != null }) {
                 cport = disc!!.connect!!.port
             } else {
                 setState("페어링 완료! 무선 디버깅 화면 위쪽 'IP 주소 및 포트'의 포트(5자리)를 입력하세요")
+                wantPort = true
                 alertCodeReady("연결 포트가 필요해요", "무선 디버깅 화면 위쪽 'IP 주소 및 포트'의 포트(5자리)를 입력하세요", portOnly = true)
                 val e2 = System.currentTimeMillis() + 120_000L
                 while (System.currentTimeMillis() < e2 && alive(gen) && cport == null) {
@@ -364,6 +413,8 @@ class AdbPairingService : Service() {
 
     private fun done(msg: String) {
         ok = true
+        wantCode = false
+        wantPort = false
         PairInputActivity.close()
         setState(msg, input = false)
         Diag.i("ADB", msg)
@@ -469,7 +520,7 @@ class AdbPairingService : Service() {
     }
 
     /** PiP 안내 창 또는 코드 입력 창이 떠 있나 */
-    private fun uiInputActive() = PairPipActivity.isOpen || PairInputActivity.isOpen
+    private fun uiInputActive() = PairAccessibilityService.connected || PairPipActivity.isOpen || PairInputActivity.isOpen
 
     private fun cancelAlert() {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NID_ALERT)

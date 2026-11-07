@@ -3,6 +3,8 @@ package com.soby.jx11keymapper
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -11,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
+import android.provider.MediaStore
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -726,9 +729,14 @@ class MainActivity : Activity() {
         box.addView(btnBackend, fullWidth())
 
         box.addView(sectionTitle("무선 ADB"))
-        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 6자리 코드가 뜨면 구석에 떠 있는 작은 창(PiP)을 눌러 [코드 입력]을 누르고 입력하면 끝! (상단바 알림 입력창도 그대로 됩니다) 한 번 연결하면 재부팅 전까지 유지돼요."))
+        box.addView(note("① 아래 버튼을 누르면 무선 디버깅 설정이 열려요  ② 무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르세요  ③ 6자리 코드가 뜨면 앱이 설정 화면에서 자동으로 읽어 페어링해요 (접근성 켜야 함). 접근성을 안 쓰면 상단바 알림의 입력창에 코드를 입력하세요. 한 번 연결하면 재부팅 전까지 유지돼요."))
         box.addView(pill("무선 ADB 연결(페어링)", 0) { startAdbPairing() }, fullWidth())
-        box.addView(pill("코드 입력 창 테스트", 1) { testPairInput() }, fullWidth())
+        box.addView(pill("고급: PC에서 서버 시작 (USB adb 스크립트)", 1) { makeServerScript() }, fullWidth())
+        val accOn = PairAccessibilityService.isEnabled(this)
+        box.addView(pill(if (accOn) "코드 자동 입력(접근성): 켜짐 ✓" else "코드 자동 입력 켜기 (접근성)", 1) {
+            getSharedPreferences("jx11_ui", MODE_PRIVATE).edit().putBoolean("acc_declined", false).apply()
+            openAccessibilitySettings()
+        }, fullWidth())
         box.addView(pill("Shizuku 권한 요청", 1) { requestShizuku() }, fullWidth())
         box.addView(pill("ADB 서버 종료", 2) { killAdb() }, fullWidth())
     }
@@ -1021,19 +1029,35 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 버튼 한 번: 서버가 이미 떠 있는지 확인 → 없으면 무선 디버깅 화면 + 그 위에 뜨는 코드 입력 창(PairInputActivity).
-     * 입력 창은 오버레이가 아니라 일반 액티비티라 설정 화면이 숨기지 못하고, 상단바 알림이 없는 기기에서도 쓸 수 있다.
-     * 알림 입력도 그대로 병행된다.
+     * 버튼 한 번: 서버가 이미 떠 있는지 확인 → 없으면 무선 디버깅 화면을 연다.
+     * 페어링 코드는 접근성 서비스가 설정 화면에서 6자리를 직접 읽어 자동 입력한다 (알림바 없는 기기용).
+     * 코드 창은 다른 창에 포커스가 넘어가면 닫히므로 알림·오버레이·입력 창 방식은 쓰지 않는다.
+     * 접근성을 안 켠 경우에만 예전 알림 입력으로 진행한다.
      */
     private fun startAdbPairing(skipNotifCheck: Boolean = false) {
-        if (!skipNotifCheck && Build.VERSION.SDK_INT >= 33 &&
+        val auto = PairAccessibilityService.isEnabled(this)
+        if (!auto && !skipNotifCheck && Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             Diag.i("UI", "알림 권한 요청 (무선 ADB 용)")
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
             return
         }
-        Diag.i("UI", "무선 ADB 연결 버튼 · 서버 확인 중")
+        val prefs = getSharedPreferences("jx11_ui", MODE_PRIVATE)
+        if (!auto && !prefs.getBoolean("acc_declined", false)) {
+            Diag.i("UI", "접근성 자동 입력 안내")
+            AlertDialog.Builder(this)
+                .setTitle("코드 자동 입력 (접근성)")
+                .setMessage("상단 알림바를 못 쓰는 기기(전자책 리더 등)에서는 페어링 코드를 옮겨 적을 방법이 없어요. 접근성 서비스를 켜면 설정 앱의 페어링 코드 창에 뜬 6자리를 앱이 직접 읽어 자동으로 페어링해요.\n\n• 설정 앱 화면만 읽고, 아무 것도 조작하지 않아요\n• 설정 > 접근성 > 설치된 앱 > 'JX-11 키맵퍼 자동 입력'을 켜세요\n• 켜지지 않으면 설정 > 앱 > JX-11 키맵퍼 > ⋮ > '제한된 설정 허용' 후 다시 켜세요\n\n켠 뒤 [무선 ADB 연결]을 다시 눌러 주세요.")
+                .setPositiveButton("접근성 설정 열기") { _, _ -> openAccessibilitySettings() }
+                .setNegativeButton("알림으로 진행") { _, _ ->
+                    prefs.edit().putBoolean("acc_declined", true).apply()
+                    startAdbPairing(skipNotifCheck)
+                }
+                .show()
+            return
+        }
+        Diag.i("UI", "무선 ADB 연결 버튼 · 서버 확인 중 (접근성 자동 입력=$auto)")
         Thread {
             val r = try {
                 AdbBridge.probe()
@@ -1052,25 +1076,57 @@ class MainActivity : Activity() {
                     toast("이미 서버가 실행 중이에요")
                     return@runOnUiThread
                 }
-                // 이 화면이 아직 앞에 있는 지금, 설정 화면 → 그 위에 입력 창 순서로 연다 (나중에 서비스에서 열면 백그라운드 시작 제한에 걸림)
                 openWirelessDebugging()
-                try {
-                    PairPipActivity.open(this)
-                } catch (t: Throwable) {
-                    Diag.e("UI", "PiP 안내 창 열기 실패", t)
-                }
-                toast("'페어링 코드로 기기 페어링'을 눌러 코드가 뜨면, 구석의 작은 창을 눌러 [코드 입력]을 누르세요")
+                toast(
+                    if (auto) "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면 코드를 자동으로 읽어요"
+                    else "무선 디버깅을 켜고 '페어링 코드로 기기 페어링'을 누르면, 상단바 알림에 코드 입력창이 떠요"
+                )
             }
         }.start()
     }
 
-    /** 페어링 없이 입력 창만 띄워 본다 (설정 화면 위 표시·키보드 입력 확인용) */
-    private fun testPairInput() {
+    /**
+     * 알림바·페어링 없이 쓰는 방법: PC 에서 USB adb(셸 권한)로 이 스크립트를 한 번 실행하면 서버가 뜬다.
+     * 스크립트는 다운로드 폴더(/sdcard/Download/jx11_start.sh)에 저장된다.
+     */
+    private fun makeServerScript() {
         try {
-            PairPipActivity.open(this, test = true)
+            val text = AdbBridge.serverStartScript(this)
+            val name = "jx11_start.sh"
+            val coll = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            contentResolver.query(
+                coll, arrayOf(MediaStore.Downloads._ID),
+                "${MediaStore.Downloads.DISPLAY_NAME}=?", arrayOf(name), null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    contentResolver.delete(ContentUris.withAppendedId(coll, c.getLong(0)), null, null)
+                }
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/x-sh")
+                put(MediaStore.Downloads.RELATIVE_PATH, "Download/")
+            }
+            val uri = contentResolver.insert(coll, values) ?: throw java.io.IOException("파일을 만들 수 없어요")
+            contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+            Diag.i("UI", "서버 시작 스크립트 저장: Download/$name (${text.length}자)")
+            AlertDialog.Builder(this)
+                .setTitle("서버 시작 스크립트")
+                .setMessage("다운로드 폴더에 jx11_start.sh 를 만들었어요.\n\nPC에서 USB로 연결하고(ADB 열어 둔 상태) 아래를 실행하세요:\n\nadb shell sh /sdcard/Download/jx11_start.sh\n\n서버가 뜨면 이 앱이 몇 초 안에 자동으로 연결해요.\n\n• 재부팅하면 다시 실행해야 해요\n• 앱을 업데이트/재설치하면 이 버튼으로 스크립트를 다시 만든 뒤 실행하세요")
+                .setPositiveButton("확인", null)
+                .show()
         } catch (t: Throwable) {
-            Diag.e("UI", "입력창 테스트 열기 실패", t)
-            toast("열기 실패: ${t.message}")
+            Diag.e("UI", "서버 시작 스크립트 만들기 실패", t)
+            toast("스크립트 만들기 실패: ${t.message}")
+        }
+    }
+
+    private fun openAccessibilitySettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (t: Throwable) {
+            Diag.e("UI", "접근성 설정 화면 열기 실패", t)
+            toast("접근성 설정을 열 수 없어요. 설정 > 접근성 에서 직접 켜 주세요")
         }
     }
 

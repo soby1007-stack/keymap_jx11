@@ -13,9 +13,9 @@ android {
         applicationId = "com.soby.jx11keymapper"
         minSdk = 26
         targetSdk = 34
-        ndk { abiFilters += "arm64-v8a" }
-        versionCode = 35
-        versionName = "0.8.7"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        versionCode = 40
+        versionName = "0.8.12"
     }
 
     // 빌드마다 서명이 바뀌지 않도록 저장소에 포함된 debug.keystore 사용 (덮어 설치 가능)

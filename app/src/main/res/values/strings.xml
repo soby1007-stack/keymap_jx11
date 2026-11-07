@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pair_accessibility_description">무선 ADB 연결 중에만, 설정 앱의 \'페어링 코드\' 창에 뜬 6자리 코드를 읽어 자동으로 입력합니다. 다른 앱의 화면은 보지 않고, 아무 것도 조작하지 않습니다.</string>
+</resources>

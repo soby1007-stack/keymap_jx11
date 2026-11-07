@@ -257,11 +257,50 @@ class KeymapService : Service() {
             bound = true
             Shizuku.bindUserService(userArgs, conn)
             setStatus("UserService 연결 중…")
+            // 연결 콜백이 안 오는 기기가 있다 → 8초 지나면 원인 로그를 남기고 Shizuku 셸로 서버를 직접 띄우는 방식으로 대체
+            main.postDelayed({ if (started && bound && input == null) onBindTimeout() }, 8000)
         } catch (t: Throwable) {
             bound = false
             Diag.e("BIND", "bind 실패", t)
             setStatus("연결 실패: ${t.message}")
             main.postDelayed({ tryBind() }, 3000)
+        }
+    }
+
+    @Volatile private var viaShizukuServer = false
+    private var shizukuLaunching = false
+
+    private fun onBindTimeout() {
+        if (shizukuLaunching) return
+        Diag.e(
+            "BIND",
+            "UserService 가 8초 안에 연결되지 않음 (Shizuku v${try { Shizuku.getVersion() } catch (t: Throwable) { -1 }}) → " +
+                "Shizuku 셸로 서버를 직접 띄우는 방식으로 대체. 원인 확인: 기기 logcat 의 Shizuku/ShizukuServer 줄"
+        )
+        setStatus("UserService 연결 안 됨 — Shizuku 셸로 서버 직접 기동 중…")
+        try {
+            Shizuku.unbindUserService(userArgs, conn, true)
+        } catch (t: Throwable) {
+            Diag.w("BIND", "unbind 실패(무시): ${t.message}")
+        }
+        bound = false
+        shizukuLaunching = true
+        io.execute {
+            try {
+                val err = AdbBridge.launchServerViaShizuku(this)
+                if (err == null) {
+                    viaShizukuServer = true
+                    main.post { connectAdb() }
+                } else {
+                    setStatus("Shizuku 서버 기동 실패: $err")
+                    main.post { retryAdb(1000) }   // PC 에서 스크립트로 띄운 서버가 있으면 그쪽으로 계속 접속 시도
+                }
+            } catch (t: Throwable) {
+                Diag.e("SHIZUKU", "Shizuku 서버 기동 중 오류", t)
+                setStatus("Shizuku 서버 기동 오류: ${t.message}")
+            } finally {
+                shizukuLaunching = false
+            }
         }
     }
 
@@ -273,7 +312,7 @@ class KeymapService : Service() {
 
     private fun connectAdb() {
         if (!started || adbConnecting || input != null) return
-        if (Cfg.backend == BACKEND_SHIZUKU) return
+        if (Cfg.backend == BACKEND_SHIZUKU && !viaShizukuServer) return
         adbConnecting = true
         io.execute {
             try {
@@ -292,9 +331,9 @@ class KeymapService : Service() {
                         c.start(Cfg.deviceFilter, callback)
                         grantUsage()
                         pushScroll()
-                        via = "무선 ADB"
+                        via = if (viaShizukuServer) "Shizuku 셸 서버" else "무선 ADB"
                         Diag.i("ADB", "서버 연결됨: ${c.ping()}")
-                        setStatus("동작 중 · 무선 ADB (장치 필터 '${Cfg.deviceFilter}')")
+                        setStatus("동작 중 · $via (장치 필터 '${Cfg.deviceFilter}')")
                     }
                     SocketInput.Result.OLD_VERSION -> {
                         Diag.w("ADB", "서버 버전 ${c.serverVersion} ≠ 앱 ${BuildConfig.VERSION_CODE} → 서버 종료")
